@@ -6,7 +6,7 @@ from skimage.measure import label as cc_label
 from scipy.ndimage import binary_dilation
 
 from sam2_support_match.preprocessing import body_mask_2d
-from sam2_support_match.utils import _largest_cc, _to_grid
+from sam2_support_match.utils import _largest_cc, _to_grid, _two_legs_cc
 
 BG_KEY = "__background__"
 
@@ -67,6 +67,7 @@ def multiclass_score_maps(feat_query: torch.Tensor, bags: dict) -> dict:
     Qn = F.normalize(feat_query.reshape(C, h * w), dim=0)
 
     def _max_sim(B):
+        """Best-matching bag vector per query cell, for one class's bag B."""
         sim = B.t() @ Qn  # [N_bag, h*w] similarity of every bag vector to every query cell
         return sim.max(dim=0).values.reshape(h, w)  # best-matching bag vector per cell
 
@@ -120,8 +121,9 @@ def multiclass_masks(score_maps: dict, query_body2d: np.ndarray, img_hw: tuple,
     """
     Input: score_maps dict[roi_name -> [h,w]], query_body2d [H,W] bool, img_hw (H,W)
     Return: dict[roi_name -> (score: float, mask: [H,W] bool)]
-    Upsample score maps to full-res, each pixel claimed by highest-scoring class
-    above score_thresh, restricted to body region.
+    Winner-take-all per pixel, upsampled to full-res. Gated per body component
+    (both legs if bilateral, else whole body) so a class keeps every blob it
+    wins, not just the largest -- merged back under one roi_name.
     """
     if cc_mode != 'dilate_largest':
         raise ValueError(f"unsupported cc_mode: {cc_mode!r}")
@@ -136,16 +138,23 @@ def multiclass_masks(score_maps: dict, query_body2d: np.ndarray, img_hw: tuple,
     ups = F.interpolate(t, size=(H, W), mode='bilinear', align_corners=False)[0].numpy()  # [K,H,W]
     win, best = ups.argmax(0), ups.max(0)  # per-pixel winning class index / its score
 
-    region = _largest_cc(query_body2d) > 0.5  # single region: whole body, noise blobs dropped
+    legs = _two_legs_cc(query_body2d)
+    regions = legs if legs is not None else (_largest_cc(query_body2d) > 0.5,)
 
     out = {}
     for ci, c in enumerate(names):
-        blob = (win == ci) & (best > score_thresh) & region
-        if not blob.any():
-            continue
-        mask = _mask_from_blob(blob, best, cell_px)
-        out[c] = (float(best[blob].max()), mask)
-    return out
+        for leg in regions:
+            blob = (win == ci) & (best > score_thresh) & leg
+            if not blob.any():
+                continue
+            mask = _mask_from_blob(blob, best, cell_px)
+            score = float(best[blob].max())
+            if c not in out:
+                out[c] = [score, mask]
+            else:
+                out[c][0] = max(out[c][0], score)
+                out[c][1] = out[c][1] | mask
+    return {c: (s, m) for c, (s, m) in out.items()}
 
 
 def pick_anchors(candidates: list, n_anchors: int = 3, min_gap: int = 3) -> list:

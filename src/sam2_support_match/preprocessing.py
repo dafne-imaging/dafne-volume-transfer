@@ -44,7 +44,8 @@ def resize_grayscale_to_rgb_and_resize(array: np.ndarray, image_size: int) -> np
         out[i] = np.array(img).transpose(2, 0, 1)
     return out
 
-def body_mask_2d(frame: np.ndarray, body_thresh: float = 10.0, body_min_prox: int = 3) -> np.ndarray: 
+def body_mask_2d(frame: np.ndarray, body_thresh: float = 10.0, body_min_prox: int = 3) -> np.ndarray:
+    """Threshold frame, keep connected components above body_min_prox px, fill holes."""
     m = frame > body_thresh
     if not m.any(): 
         return m

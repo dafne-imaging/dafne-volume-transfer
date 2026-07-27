@@ -9,6 +9,7 @@ _IMAGENET_STD  = (0.229, 0.224, 0.225)
 
 class MedSAM2Segmenter: 
     def __init__(self, checkpoint: str, model_cfg: str, device: str='cuda'):
+        """Load SAM2 video predictor from checkpoint/config onto device."""
         self.checkpoint = checkpoint
         self.predictor = build_sam2_video_predictor_npz(model_cfg, checkpoint)
         self.model_cfg = model_cfg
