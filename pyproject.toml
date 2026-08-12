@@ -26,6 +26,16 @@ dependencies = [
 dev = [
     "pytest>=8.0"
 ]
+napari = [
+    "napari>=0.5",
+    "qtpy",
+]
+
+[project.entry-points."napari.manifest"]
+napari-sam2-support-match = "napari_sam2_support_match:napari.yaml"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+napari_sam2_support_match = ["napari.yaml"]

@@ -82,9 +82,9 @@ def leg_crop_boxes(vol_u8: np.ndarray, body_thresh: float = 10.0, body_min_px: i
                    margin_frac: float = 0.15, min_leg_ratio: float = 0.2) -> dict:
     """
     Input: vol_u8 [Z,H,W] uint8
-    Return: {'L': (y0,y1,x0,x1), 'R': (y0,y1,x0,x1)} pixel windows, one per side,
-    valid across the whole volume (union of each slice's side bbox + margin).
-    Side is a pure geometric split (no anatomical L/R meaning needed): a class is
+    Return: {'L': (y0,y1,x0,x1), 'R': (y0,y1,x0,x1)}, one crop window per side, valid
+    across the whole volume (union of every slice's side bbox, plus margin_frac).
+    'L'/'R' is a pure geometric split, no anatomical meaning implied.
     """
     H, W = vol_u8.shape[1], vol_u8.shape[2]
     acc = {'L': None, 'R': None}

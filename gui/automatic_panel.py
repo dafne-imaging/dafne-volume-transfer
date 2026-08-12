@@ -1,0 +1,113 @@
+import os
+
+from qtpy.QtCore import Qt
+from qtpy.QtWidgets import QApplication, QMessageBox
+
+from gui.config import _CKPT_NAME
+from sam2_support_match import metrics
+from sam2_support_match.automatic import debugging
+from sam2_support_match.automatic.api import find_prompts, propagate
+from sam2_support_match.automatic.backbone import MedSAM2Segmenter
+from sam2_support_match.automatic.checkpoints import CHECKPOINT_URLS, download_checkpoint, resolve_checkpoint
+from sam2_support_match.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
+
+
+class AutomaticPanelMixin:
+    """The 'Extent' route's run: confirmed window per roi -> find_prompts + propagate."""
+
+    def _get_seg(self) -> MedSAM2Segmenter:
+        if self.seg is None:
+            ckpt_path = os.environ["SAM2_SUPPORT_MATCH_CHECKPOINT"]
+            if not os.path.isfile(ckpt_path):
+                # download_checkpoint saves under the URL's own filename, so pick the
+                # entry whose filename matches what SAM2_SUPPORT_MATCH_CHECKPOINT
+                # points at, in case a custom checkpoint path is configured
+                ckpt_name = next((n for n, u in CHECKPOINT_URLS.items()
+                                  if os.path.basename(u) == os.path.basename(ckpt_path)), _CKPT_NAME)
+                download_checkpoint(ckpt_name, os.path.dirname(ckpt_path))
+            checkpoint, model_cfg = resolve_checkpoint(None, None)
+            # 'auto': CUDA when the machine has a usable one, cpu otherwise. Overridable
+            # with SAM2_SUPPORT_MATCH_DEVICE (e.g. 'cpu' to force, 'mps' to try Metal,
+            # 'cuda:1' to pick a card) -- see backbone.pick_device.
+            device = os.environ.get("SAM2_SUPPORT_MATCH_DEVICE", "auto")
+            self.seg = MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+            print(f"[sam2-support-match] running on device: {self.seg.device}", flush=True)
+        return self.seg
+
+    def _release_seg(self):
+        """Unload the model and free the GPU memory it holds, weights included. Called at
+        the end of every Segment run and on close: nothing outside a run needs the card,
+        and the next _get_seg() rebuilds the segmenter from the checkpoint."""
+        if self.seg is None:
+            return
+        self.seg.release()
+        self.seg = None
+
+    def _on_segment(self):
+        if self.support_vol is None or self.query_vol is None:
+            QMessageBox.warning(self, "Missing data", "Load support and query first.")
+            return
+        if not self.windows:
+            QMessageBox.warning(self, "No extent", "Confirm at least one ROI's extent first.")
+            return
+
+        support_masks = labels_to_masks(self.support_lbl, self.roi_names)
+        windows = {r: w for r, w in self.windows.items() if r in support_masks}
+        if not windows:
+            QMessageBox.warning(self, "No extent", "The confirmed ROI(s) are empty on the support labels.")
+            return
+
+        self.status.setText("Segmenting on CPU, this takes a while…")
+        self.segment_btn.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        debug_dir = os.environ.get("SAM2_SUPPORT_MATCH_DEBUG_DIR")
+        debug_sink = {} if debug_dir else None
+        # printed every run: an env var that silently did not reach the process (set on
+        # its own shell line instead of the python line, so never exported) otherwise
+        # looks exactly like "the dump feature is broken"
+        print(f"[debug] dir={os.path.abspath(debug_dir) if debug_dir else 'off'}", flush=True)
+        try:
+            support_slices = volume_to_slices(volume_to_uint8(self.support_vol))
+            query_slices = volume_to_slices(volume_to_uint8(self.query_vol))
+            # unwindowed rois are not segmented, but still act as rival classes when scoring
+            query_gt = self._query_gt_masks()
+            self.anchors, bounds = find_prompts(support_slices, query_slices, support_masks,
+                                                windows, return_windows=True, seg=self._get_seg(),
+                                                debug_sink=debug_sink, query_masks=query_gt)
+            # bounds stop the tracker once the organ ends, see api.propagate
+            self.result = propagate(query_slices, self.anchors, z_bounds=bounds,
+                                    seg=self._get_seg(), prompt_kind=self.prompt_kind,
+                                    resolve_overlaps=self.overlap_check.isChecked(),
+                                    joint_propagate=self.joint_check.isChecked(),
+                                    fill_gaps=self.fillgaps_check.isChecked())
+            scores = None
+            if query_gt is not None:
+                scores = metrics.evaluate(self.result, query_gt, windows=bounds)
+                print("[eval]\n" + metrics.format_report(scores), flush=True)
+            dump_path = None
+            if debug_dir:
+                dump_path = debugging.dump_run(debug_dir, self.support_path or "support",
+                                               self.query_path or "query",
+                                               debug_sink, scores=scores)
+                print(f"[debug] wrote {dump_path}", flush=True)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            self.status.setText("Segmentation failed.")
+            self._update_enabled()
+            QMessageBox.critical(self, "Segmentation failed", str(e))
+            return
+        finally:
+            # results are numpy from here on, so the run owns nothing on the GPU any more:
+            # release everything, weights included, rather than sitting on the card while
+            # the user looks at the output. Runs on failure too. Cost: the next Segment
+            # reloads the checkpoint.
+            self._release_seg()
+        QApplication.restoreOverrideCursor()
+
+        picked = ", ".join(f"{r}: {sorted(a)}" for r, a in sorted(self.anchors.items()))
+        dumps = "  dump written" if dump_path else ""
+        gt = f"  dice={scores['_mean_dice']:.3f}" if scores else ""
+        self.status.setText(f"Done.{dumps}{gt}  Anchors — {picked}")
+        self._refresh_query_labels()
+        self._update_enabled()
