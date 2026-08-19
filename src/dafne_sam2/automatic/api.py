@@ -1,5 +1,6 @@
 import itertools
 from collections import defaultdict
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -252,7 +253,9 @@ def propagate(query_slices: dict[int, np.ndarray],
               prompt_kind: str | dict[str, str] = 'mask',
               resolve_overlaps: bool = False,
               joint_propagate: bool = False,
-              fill_gaps: bool = False) -> dict[str, dict[int, np.ndarray]]:
+              fill_gaps: bool = False,
+              progress_callback: Optional[Callable[[int, int], None]] = None
+              ) -> dict[str, dict[int, np.ndarray]]:
     """
     Propagation only, matching-agnostic: prompts can come from find_prompts, an external
     tool, or manual annotation. One SAM2 pass per roi, or one shared session (joint_propagate).
@@ -266,6 +269,10 @@ def propagate(query_slices: dict[int, np.ndarray],
     one tracker ever reaches a pixel), joint_propagate (shared session discourages drift
     in the first place, combinable with resolve_overlaps), fill_gaps (patch an isolated
     single-slice dropout, applied last).
+    progress_callback(rois_done, rois_total): called after each roi's SAM2 pass completes
+    (independent-session mode) or once before/after the single shared pass (joint_propagate,
+    where per-roi granularity isn't available -- one shared SAM2 session tracks every roi at
+    once).
     """
     if seg is None:
         checkpoint, model_cfg = resolve_checkpoint(checkpoint, model_cfg)
@@ -293,7 +300,11 @@ def propagate(query_slices: dict[int, np.ndarray],
             else:
                 local_prompts[roi_name] = local
 
+        if progress_callback is not None:
+            progress_callback(0, 1)
         result = seg.segment_volume_joint(vol_u8, local_prompts, kinds, return_logits=resolve_overlaps)
+        if progress_callback is not None:
+            progress_callback(1, 1)
         propagated_by_roi, logits_by_roi = result if resolve_overlaps else (result, None)
 
         out = {}
@@ -310,7 +321,10 @@ def propagate(query_slices: dict[int, np.ndarray],
 
     out = {}
     logits_by_roi = {} if resolve_overlaps else None
-    for roi_name, roi_prompts in prompts.items():
+    n_rois = len(prompts)
+    if progress_callback is not None:
+        progress_callback(0, n_rois)
+    for i, (roi_name, roi_prompts) in enumerate(prompts.items()):
         bad = [idx for idx in roi_prompts if idx not in pos_of]
         if bad:
             raise ValueError(f"prompt slice(s) {bad} for {roi_name!r} not in query_slices")
@@ -329,6 +343,8 @@ def propagate(query_slices: dict[int, np.ndarray],
         out[roi_name] = {idx: (propagated[pos_of[idx]].astype(bool) if lo <= idx <= hi
                                else np.zeros(vol_u8.shape[1:], dtype=bool))
                          for idx in sorted_idxs}
+        if progress_callback is not None:
+            progress_callback(i + 1, n_rois)
 
     if resolve_overlaps:
         _resolve_overlaps(out, logits_by_roi, pos_of, sorted_idxs)

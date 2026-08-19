@@ -124,16 +124,16 @@ into matching itself.
 GUI-independent (no `qtpy`/`gui` import) entry points for embedding this package elsewhere
 (e.g. dafne):
 
-- `SAM_refine(image, mask, seg=None, prompt_kind='mask') -> mask` — refine one 2D
-  pseudo-label mask through SAM2 as a single-frame mask/box-prompted session (the mask
-  decoder's own refinement of the prompt, not a multi-frame track).
-- `transfer_slice(image, support, support_masks, seg=None, prompt_kind='mask') -> dict[roi_name -> mask]`
+- `SAM_refine(image, mask, seg=None, prompt_kind='mask', progress_callback=None) -> mask` —
+  refine one 2D pseudo-label mask through SAM2 as a single-frame mask/box-prompted session
+  (the mask decoder's own refinement of the prompt, not a multi-frame track).
+- `transfer_slice(image, support, support_masks, seg=None, prompt_kind='mask', progress_callback=None) -> dict[roi_name -> mask]`
   — one-shot counterpart to the GUI's Slice-match route: for each ROI independently, find
   the best-matching support slice for `image` (`SliceMatchSession`, one query slice instead
   of the GUI's multi-slice loop), transfer its mask via SAM2 appearance matching, then
   refine it (`SAM_refine`). `support_masks` here is `dict[roi_name -> [Z,H,W] binary]`
   (whole-volume masks aligned with `support`), not the per-slice-dict form used elsewhere.
-- `SAM_propagate(image, masks, seg=None, ...) -> dict[roi_name -> dict[slice_idx -> mask]]`
+- `SAM_propagate(image, masks, seg=None, ..., progress_callback=None) -> dict[roi_name -> dict[slice_idx -> mask]]`
   — thin wrapper over `automatic/api.propagate` for a raw `[Z,H,W]` volume input.
 - `load_segmenter(checkpoint_dir, progress_callback=None, checkpoint_name='sam2.1_tiny', device='auto') -> SAM2Segmenter`
   — modeled on `dafne.utils.sam_mask_refine.load_sam`: lets an external caller manage its
@@ -146,6 +146,17 @@ owns its lifecycle); left `None`, each call builds its own default segmenter
 (`CHECKPOINT_MODELS["sam2.1_tiny"]`, downloaded into the `appdirs` cache dir if needed) and
 releases it before returning — so a call with no `seg` is self-contained but reloads
 weights every time.
+
+`progress_callback` has two different contracts depending on the function (see
+`public_api.py`'s module docstring): for `SAM_refine`/`transfer_slice`/`SAM_propagate` it's
+`(current, total=100)`, percentage-scale, covering the optional checkpoint download/load (if
+`seg` is `None`) *and* the call's own execution stages (`transfer_slice`: one increment per
+ROI; `SAM_propagate`: driven by `automatic.api.propagate`'s own `progress_callback`, one
+increment per ROI in independent-session mode, a single start/end pair under
+`joint_propagate`); for `load_segmenter` it's `(current_bytes, total_bytes)`, the raw
+download byte count (`automatic.checkpoints.download_checkpoint`'s contract) since there's
+no execution stage beyond the download to report on. `public_api._scaled` is the helper
+that remaps a sub-task's own progress range onto an outer 0-100 scale.
 
 ### GUI structure (`gui/`)
 
