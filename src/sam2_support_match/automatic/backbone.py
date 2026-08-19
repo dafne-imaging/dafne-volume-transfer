@@ -5,8 +5,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from sam2.build_sam import build_sam2_video_predictor_npz
 from sam2_support_match.automatic.device_utils import pick_device, empty_cache
+from sam2_support_match.automatic.video_predictor_npz import build_sam2_video_predictor_npz
 from sam2_support_match.preprocessing import resize_grayscale_to_rgb_and_resize, IMG_SIZE
 
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)

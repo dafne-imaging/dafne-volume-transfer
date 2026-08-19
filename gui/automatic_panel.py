@@ -8,7 +8,7 @@ from sam2_support_match import metrics
 from sam2_support_match.automatic import debugging
 from sam2_support_match.automatic.api import find_prompts, propagate
 from sam2_support_match.automatic.backbone import MedSAM2Segmenter
-from sam2_support_match.automatic.checkpoints import CHECKPOINT_URLS, download_checkpoint, resolve_checkpoint
+from sam2_support_match.automatic.checkpoints import CHECKPOINT_MODELS, download_checkpoint, resolve_checkpoint
 from sam2_support_match.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
 
 
@@ -19,11 +19,11 @@ class AutomaticPanelMixin:
         if self.seg is None:
             ckpt_path = os.environ["SAM2_SUPPORT_MATCH_CHECKPOINT"]
             if not os.path.isfile(ckpt_path):
-                # download_checkpoint saves under the URL's own filename, so pick the
-                # entry whose filename matches what SAM2_SUPPORT_MATCH_CHECKPOINT
+                # download_checkpoint saves under CHECKPOINT_MODELS[name]['file_name'], so
+                # pick the entry whose filename matches what SAM2_SUPPORT_MATCH_CHECKPOINT
                 # points at, in case a custom checkpoint path is configured
-                ckpt_name = next((n for n, u in CHECKPOINT_URLS.items()
-                                  if os.path.basename(u) == os.path.basename(ckpt_path)), _CKPT_NAME)
+                ckpt_name = next((n for n, d in CHECKPOINT_MODELS.items()
+                                  if d["file_name"] == os.path.basename(ckpt_path)), _CKPT_NAME)
                 download_checkpoint(ckpt_name, os.path.dirname(ckpt_path))
             checkpoint, model_cfg = resolve_checkpoint(None, None)
             # 'auto': CUDA when the machine has a usable one, cpu otherwise. Overridable
