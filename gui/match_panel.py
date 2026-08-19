@@ -3,8 +3,12 @@ from qtpy.QtWidgets import QApplication, QMessageBox
 
 from sam2_support_match import metrics
 from sam2_support_match.automatic.api import propagate
-from sam2_support_match.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
-from sam2_support_match.semi_automatic.slice_api import SliceMatchSession
+from sam2_support_match.preprocessing import volume_to_slices, volume_to_uint8
+from sam2_support_match.semi_automatic.api import (
+    SliceMatchConfig,
+    SliceMatchSession,
+    create_session_from_volumes,
+)
 
 
 class MatchPanelMixin:
@@ -15,12 +19,14 @@ class MatchPanelMixin:
         every call: a Segment/Propagate run releases the model, while the session's cached
         descriptors stay valid (same checkpoint, same device) and are worth keeping."""
         if self.session is None:
-            self.session = SliceMatchSession(
+            self.session = create_session_from_volumes(
                 self._get_seg(),
-                volume_to_slices(volume_to_uint8(self.support_vol)),
-                labels_to_masks(self.support_lbl, self.roi_names),
-                volume_to_slices(volume_to_uint8(self.query_vol)),
-                enhanced=True)
+                self.support_vol,
+                self.support_lbl,
+                self.roi_names,
+                self.query_vol,
+                config=SliceMatchConfig(enhanced=True),
+            )
         else:
             self.session.seg = self._get_seg()
         return self.session
@@ -33,7 +39,7 @@ class MatchPanelMixin:
 
     def _refresh_match_label(self):
         roi = self.roi_combo.currentText()
-        pairs = self.session.pairs.get(roi, []) if self.session else []
+        pairs = self.session.matches_for(roi) if self.session else ()
         # the mode the live session was built with, not the checkbox: they differ until the
         # next Find rebuilds the descriptors
         mode = self.session.mode_label() if self.session else "no session"
@@ -66,53 +72,58 @@ class MatchPanelMixin:
 
         self.match_combo.blockSignals(True)
         self.match_combo.clear()
-        for s_idx, sim in ranked:
-            self.match_combo.addItem(f"support {s_idx}   sim={sim:.3f}", s_idx)
+        for candidate in ranked:
+            self.match_combo.addItem(
+                f"support {candidate.support_index}   sim={candidate.similarity:.3f}",
+                candidate,
+            )
         self.match_combo.blockSignals(False)
         if not ranked:
             self.status.setText(f"{roi}: no support slice carries this ROI.")
         else:
-            self.support_pane.set_z(ranked[0][0])
-            self.status.setText(f"{roi}: query {q_idx} → support {ranked[0][0]} "
-                                f"(sim {ranked[0][1]:.3f}). Review, then accept.")
+            best = ranked[0]
+            self.support_pane.set_z(best.support_index)
+            self.status.setText(
+                f"{best.roi_name}: query {best.query_index} → support {best.support_index} "
+                f"(sim {best.similarity:.3f}). Review, then accept."
+            )
         self._update_enabled()
 
     def _on_match_pick(self, index: int):
-        s_idx = self.match_combo.itemData(index)
-        if s_idx is not None:
-            self.support_pane.set_z(int(s_idx))
+        candidate = self.match_combo.itemData(index)
+        if candidate is not None:
+            self.support_pane.set_z(candidate.support_index)
 
     def _on_accept_match(self):
-        roi = self.roi_combo.currentText()
-        if not self._match_ready(roi):
-            return
-        s_idx = self.match_combo.currentData()
-        if s_idx is None:
+        candidate = self.match_combo.currentData()
+        if candidate is None:
             QMessageBox.warning(self, "No candidate", "Run 'Find support match' first.")
             return
-        q_idx = self.query_pane.z
+        roi = candidate.roi_name
+        if not self._match_ready(roi):
+            return
+        q_idx = candidate.query_index
+        s_idx = candidate.support_index
         ses = self._get_session()
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
         try:
-            mask = ses.add_pair(roi, q_idx, int(s_idx))
+            accepted = ses.accept_candidate(candidate)
         except Exception as e:
-            QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Anchor failed", str(e))
             return
         finally:
             QApplication.restoreOverrideCursor()
 
-        if mask is None:
-            ses.drop_pair(roi, q_idx)
-            self.status.setText(f"{roi}: nothing matched on query slice {q_idx}, pair dropped.")
+        if accepted is None:
+            self.status.setText(f"{roi}: nothing matched on query slice {q_idx}.")
             self._refresh_match_label()
             return
 
         self.anchors = ses.anchors()
         self.view_combo.setCurrentIndex(1)  # anchors view, so the new mask is visible
         self._refresh_query_labels()
-        self.query_pane.set_marks(set(self.anchors.get(roi, {})), "anchor")
+        self.query_pane.set_marks(set(ses.anchor_indices(roi)), "anchor")
         # the pane stays where it is: jumping on accept moves the slice out from under the
         # person still looking at what they just confirmed. The next slice is suggested in
         # the status bar instead, and they scroll there when they are ready.
@@ -124,14 +135,14 @@ class MatchPanelMixin:
 
     def _on_undo_match(self):
         roi = self.roi_combo.currentText()
-        pairs = self.session.pairs.get(roi, []) if self.session else []
+        pairs = self.session.matches_for(roi) if self.session else ()
         if not pairs:
             return
         q_idx = pairs[-1][0]
         self.session.drop_pair(roi, q_idx)
         self.anchors = self.session.anchors()
         self._refresh_query_labels()
-        self.query_pane.set_marks(set(self.anchors.get(roi, {})), "anchor")
+        self.query_pane.set_marks(set(self.session.anchor_indices(roi)), "anchor")
         self.status.setText(f"{roi}: dropped the anchor on query slice {q_idx}.")
         self._refresh_match_label()
 

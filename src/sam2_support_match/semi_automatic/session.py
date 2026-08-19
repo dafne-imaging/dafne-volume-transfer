@@ -13,12 +13,13 @@ from sam2_support_match.semi_automatic.slice_matching import (
 )
 from sam2_support_match.utils import _to_grid
 
+from .types import AcceptedMatch, MatchCandidate
 
 class SliceMatchSession:
     """
     Semi-automatic anchor collection, one query slice at a time. Loop the caller (GUI)
-    drives, per roi: suggest_support(roi, q_idx) -> user confirms one -> add_pair(roi,
-    q_idx, s_idx) -> anchor mask -> next_query_slice(roi) proposes where to go next ->
+    drives, per roi: suggest_support(roi, q_idx) -> user confirms one ->
+    accept_candidate(candidate) -> anchor mask -> next_query_slice(roi) proposes where to go next ->
     repeat; anchors()/z_bounds() then feed api.propagate.
 
     Each added pair refines the affine z map (support_idx = a*query_idx + b), which
@@ -28,6 +29,10 @@ class SliceMatchSession:
     over the binary union of its support masks, applied to the query at the same pixel
     coordinates. enhanced=True pools over the roi's exclusive core (build_roi_pool_weights)
     and moves that region into the query slice's own body frame first (align_region).
+
+    Two matching modality is developed: 
+        1. suggest_support(): compared regions to find the most similar support slice 
+        2. accept_candidate(): more accurately matched
     """
 
     def __init__(self, seg, support_slices: dict, support_masks: dict, query_slices: dict,
@@ -63,18 +68,21 @@ class SliceMatchSession:
         self._query_geo = {}             # query slice_idx -> body (cy, cx, scale) or None
         self._roi_centroid = {}          # roi_name -> the frame its region is drawn in
         self._scale = None               # query body size / support body size, no pair yet
-        self.pairs = {}                  # roi_name -> list[(query_idx, support_idx)]
-        self.prompts = {}                # roi_name -> dict[query_idx -> anchor mask]
-        self.scores = {}                 # roi_name -> dict[query_idx -> anchor score]
+        self.pairs = {}                  # roi_name -> list[(query_idx, support_idx)], confermed query-suport pairs
+        self.prompts = {}                # roi_name -> dict[query_idx -> anchor mask], anchors on query mask
+        self.scores = {}                 # roi_name -> dict[query_idx -> anchor score], anchor's score on query mask
 
     def mode_label(self) -> str:
         """Which of align/soft_pool is on, for a status line."""
         on = [n for n, f in (("align", self.align), ("core-pool", self.soft_pool)) if f]
         return "+".join(on) if on else "base"
 
-    # -- alignment --------------------------------------------------------
+    # ALIGNEMENT
     def _support_geometry(self) -> dict:
-        """dict[slice_idx -> (cy,cx,scale)] for support slices carrying a mask."""
+        """dict[slice_idx -> (cy,cx,scale)] for support slices carrying a mask.
+            Return: dict with slice idx as index and (cy, cx) centroid coordinates 
+            and scale (area in pixel) for selected ROI
+        """
         if self._supp_geo is None:
             idxs = {i for masks in self.support_masks.values() for i in masks}
             self._supp_geo = build_body_geometry(self.support_slices, self.body_thresh,
@@ -138,7 +146,7 @@ class SliceMatchSession:
         region = self.regions.get(roi_name)
         if region is None or not self.align:
             return region
-        src = self._src_centroid(roi_name)
+        src = self._src_centroid(roi_name) #compute ROI median centroid
         dst = self._query_geometry(q_idx)
         if src is None or dst is None:
             return region
@@ -149,7 +157,7 @@ class SliceMatchSession:
                               out_shape=(H, W))
         return warped if warped is not None and warped.any() else region
 
-    # -- similarity ----------------------------------------------------------
+    # SIMILARITY
     def _bags(self) -> dict:
         if self._slice_bags is None:
             self._slice_bags = build_slice_bags(self.seg, self.support_slices,
@@ -167,15 +175,18 @@ class SliceMatchSession:
         None (search all) until a pair exists or radius <= 0."""
         if self.search_radius <= 0 or not self.pairs.get(roi_name):
             return None
-        a, b = fit_z_map(self.pairs[roi_name])
-        centre = int(round(a * q_idx + b))
+        a, b = fit_z_map(self.pairs[roi_name]) #estimate slopes and intercept
+        centre = int(round(a * q_idx + b)) #estimate centre using a and b (linear regression)
         return centre - self.search_radius, centre + self.search_radius
 
     def suggest_support(self, roi_name: str, q_idx: int, top_k: int = 3,
-                        constrain: bool = True) -> list:
-        """list[(support_idx, sim)], best first, at most top_k. constrain: restrict the
-        search to search_range once the z map exists."""
-        idx_range = self.search_range(roi_name, q_idx) if constrain else None
+                        constrain: bool = True) -> list[MatchCandidate]:
+        """Best-first support candidates for one ROI and query slice.
+
+        At most ``top_k`` candidates are returned. When ``constrain`` is true, an existing
+        z map limits the support range; an empty constrained result falls back to all slices.
+        """
+        idx_range = self.search_range(roi_name, q_idx) if constrain else None #lower and upper end
         region = self.region_for(roi_name, q_idx)
         ranked = query_support_slice_similarity(
             self.seg, self.query_slices[q_idx], self._bags(), roi_name,
@@ -184,9 +195,17 @@ class SliceMatchSession:
             ranked = query_support_slice_similarity(
                 self.seg, self.query_slices[q_idx], self._bags(), roi_name,
                 region_mask=region, soft=self.soft_pool)
-        return ranked[:top_k]
+        return [
+            MatchCandidate(
+                roi_name=roi_name,
+                query_index=q_idx,
+                support_index=s_idx,
+                similarity=float(similarity),
+            )
+            for s_idx, similarity in ranked[:top_k]
+        ]
 
-    # -- anchors -------------------------------------------------------------
+    # ANCHORS
     def _bags_for_support_slice(self, s_idx: int) -> dict:
         """Multiclass bags built from support slice s_idx alone, every roi present on it
         kept as a rival class (plus background), so scoring stays winner-take-all."""
@@ -216,16 +235,42 @@ class SliceMatchSession:
         del feat
         return masks.get(roi_name)
 
-    def add_pair(self, roi_name: str, q_idx: int, s_idx: int) -> np.ndarray:
-        """Records the confirmed pair (refines the z map) and its anchor; returns the
-        anchor mask stored for q_idx, or None if nothing was found."""
+    def _store_anchor(self, roi_name: str, q_idx: int, s_idx: int,
+                      score: float, mask: np.ndarray) -> None:
+        """Commit a successfully computed pair and anchor to the session state."""
         self.pairs.setdefault(roi_name, []).append((q_idx, s_idx))
+        self.prompts.setdefault(roi_name, {})[q_idx] = mask
+        self.scores.setdefault(roi_name, {})[q_idx] = score
+
+    def accept_candidate(self, candidate: MatchCandidate) -> AcceptedMatch | None:
+        found = self.anchor_from_pair(
+            candidate.roi_name,
+            candidate.query_index,
+            candidate.support_index,
+        )
+        if found is None:
+            return None
+
+        score, mask = found
+        self._store_anchor(
+            candidate.roi_name,
+            candidate.query_index,
+            candidate.support_index,
+            score,
+            mask,
+        )
+        return AcceptedMatch(candidate=candidate, score=score, mask=mask)
+
+    def add_pair(self, roi_name: str, q_idx: int, s_idx: int) -> np.ndarray | None:
+        """Compute and atomically record a pair, returning its anchor mask or None.
+
+        Prefer ``accept_candidate`` when the pair comes from ``suggest_support``.
+        """
         found = self.anchor_from_pair(roi_name, q_idx, s_idx)
         if found is None:
             return None
         score, mask = found
-        self.prompts.setdefault(roi_name, {})[q_idx] = mask
-        self.scores.setdefault(roi_name, {})[q_idx] = score
+        self._store_anchor(roi_name, q_idx, s_idx, score, mask)
         return mask
 
     def drop_pair(self, roi_name: str, q_idx: int) -> None:
@@ -234,7 +279,21 @@ class SliceMatchSession:
         self.prompts.get(roi_name, {}).pop(q_idx, None)
         self.scores.get(roi_name, {}).pop(q_idx, None)
 
-    # -- where to go next ----------------------------------------------------
+    def matches_for(self, roi_name: str) -> tuple[tuple[int, int], ...]:
+        """Confirmed ``(query_index, support_index)`` pairs for one ROI."""
+        return tuple(self.pairs.get(roi_name, ()))
+
+    def anchor_indices(self, roi_name: str) -> tuple[int, ...]:
+        """Sorted query indices carrying an anchor for one ROI."""
+        return tuple(sorted(self.prompts.get(roi_name, ())))
+
+    def has_anchors(self, roi_name: str | None = None) -> bool:
+        """Whether the session, or one ROI, contains at least one anchor."""
+        if roi_name is not None:
+            return bool(self.prompts.get(roi_name))
+        return any(self.prompts.values())
+
+    # WHERE TO GO NEXT
     def z_map(self, roi_name: str) -> tuple:
         """(a, b) with support_idx = a*query_idx + b, or None with no pair."""
         pairs = self.pairs.get(roi_name)
@@ -265,7 +324,7 @@ class SliceMatchSession:
             return min(free, key=lambda i: abs(i - (lo + hi) / 2.0))
         return max(free, key=lambda i: min(abs(i - u) for u in used))
 
-    # -- hand over to propagate ---------------------------------------------
+    # HAND OVER TO PROPAGATE
     def anchors(self) -> dict:
         """dict[roi_name -> dict[slice_idx -> mask]], api.propagate's prompts."""
         return {roi: dict(p) for roi, p in self.prompts.items() if p}
@@ -296,6 +355,8 @@ def collect_anchors(seg, support_slices: dict, support_masks: dict, query_slices
         ranked = ses.suggest_support(roi_name, q_idx, top_k=1)
         if not ranked:
             break
-        ses.add_pair(roi_name, q_idx, ranked[0][0])
+        candidate = ranked[0]
+        if ses.accept_candidate(candidate) is None:
+            break
         q_idx = ses.next_query_slice(roi_name)
     return ses

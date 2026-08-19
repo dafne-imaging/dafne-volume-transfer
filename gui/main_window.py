@@ -13,7 +13,7 @@ from gui.style import ROI_COLORS
 from gui.window_panel import WindowPanelMixin
 from sam2_support_match.automatic.backbone import MedSAM2Segmenter, mask_to_box
 from sam2_support_match.preprocessing import masks_to_labels
-from sam2_support_match.semi_automatic.slice_api import SliceMatchSession
+from sam2_support_match.semi_automatic.api import SliceMatchSession
 
 
 class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixin, MatchPanelMixin):
@@ -298,13 +298,13 @@ class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixi
         self.segment_btn.setEnabled(has_both and bool(self.windows))
 
         has_roi = has_both and bool(self.roi_names)
-        pairs = self.session.pairs.get(self.roi_combo.currentText(), []) if self.session else []
+        pairs = self.session.matches_for(self.roi_combo.currentText()) if self.session else ()
         self.find_btn.setEnabled(has_roi)
         self.match_combo.setEnabled(self.match_combo.count() > 0)
         self.accept_btn.setEnabled(has_roi and self.match_combo.count() > 0)
         self.undo_btn.setEnabled(bool(pairs))
         self.reset_match_btn.setEnabled(self.session is not None)
-        self.propagate_btn.setEnabled(bool(self.session and self.session.anchors()))
+        self.propagate_btn.setEnabled(bool(self.session and self.session.has_anchors()))
         self.view_combo.setEnabled(bool(self.result))
         self.export_btn.setEnabled(bool(self.result))
 

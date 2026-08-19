@@ -127,8 +127,10 @@ def build_roi_pool_weights(supp_mask_slices: dict, gamma: float = 1.0,
 
 
 def body_geometry(mask: np.ndarray) -> tuple:
-    """[H,W] bool body mask -> (cy, cx, scale=sqrt(area)), or None if empty."""
-    ys, xs = np.nonzero(mask)
+    """[H,W] bool body mask -> (cy, cx, scale=sqrt(area)), or None if empty.
+       Return the mean of ys and xs of non-zero pixels coordinates
+    """
+    ys, xs = np.nonzero(mask) # two array: non-zero pixel indexes
     if ys.size == 0:
         return None
     return float(ys.mean()), float(xs.mean()), float(np.sqrt(ys.size))
@@ -143,7 +145,10 @@ def normalized_geometry(geo: tuple, shape: tuple) -> tuple:
 
 def build_body_geometry(slices: dict, body_thresh: float = 10.0, body_min_px: int = 50,
                         idxs=None) -> dict:
-    """dict[slice_idx -> (cy,cx,scale)] over idxs (or every slice); no-body slices dropped."""
+    """dict[slice_idx -> (cy,cx,scale)] over idxs (or every slice); no-body slices dropped.
+       For each slice generate body_mask_2d and compute ys and xs as mean of non-zero pixel
+       coordinates
+    """
     out = {}
     for idx in (sorted(slices) if idxs is None else sorted(idxs)):
         geo = body_geometry(body_mask_2d(slices[idx], body_thresh, body_min_px))
@@ -153,7 +158,10 @@ def build_body_geometry(slices: dict, body_thresh: float = 10.0, body_min_px: in
 
 
 def roi_reference_centroid(geo: dict, mask_slices: dict) -> tuple:
-    """(cy, cx) median body centroid over the slices the roi appears on, or None."""
+    """(cy, cx) median body centroid over the slices the roi appears on, or None.
+        Take all slices in mask_slices and extract [(y1, x1), (y2, x2), ...] if is in geo
+        Return: median float of all slice coordinates
+    """
     rows = [geo[i][:2] for i in mask_slices if i in geo]
     if not rows:
         return None
@@ -182,6 +190,7 @@ def align_region(region: np.ndarray, src_centroid: tuple, dst_centroid: tuple,
     return out
 
 
+# drop outliers paris
 def monotone_pairs(pairs: list) -> list:
     """Largest subset of pairs that rises in support_idx as query_idx rises, sorted by
     query_idx (longest increasing subsequence)."""
@@ -207,13 +216,17 @@ def monotone_pairs(pairs: list) -> list:
         k = prev[k]
     return out[::-1]
 
-
+# find best transformation for supp_idx = a * query_idx + b
 def fit_z_map(pairs: list, a_bounds: tuple = (0.5, 2.0), min_span: int = 3) -> tuple:
     """(a, b) with support_idx = a*query_idx + b."""
     if not pairs:
         raise ValueError("fit_z_map needs at least one (query_idx, support_idx) pair")
 
     pairs = monotone_pairs(pairs)
+    # get query and support couple selected by the user
+    # (e.g couple0: (1, 10), couple1: (2, 15), couple2: (4, 25))
+    # with q the first element of of tuple and s the second one
+    # q and s factored as an array
     q = np.asarray([p[0] for p in pairs], dtype=np.float64)
     s = np.asarray([p[1] for p in pairs], dtype=np.float64)
 
@@ -221,10 +234,12 @@ def fit_z_map(pairs: list, a_bounds: tuple = (0.5, 2.0), min_span: int = 3) -> t
         # too few, or all bunched together: the slope such points imply is noise
         return 1.0, float(np.median(s - q))
 
+    # compute the slope (a): take all the couple indexes, compute the slope for each couple 
+    # combination (e.g (0,1), (0, 2), (1, 2)) and then compute the median of all slopes
     slopes = [(s[j] - s[i]) / (q[j] - q[i])
               for i, j in itertools.combinations(range(len(q)), 2) if q[j] != q[i]]
     a = float(np.clip(np.median(slopes), *a_bounds))
-    return a, float(np.median(s - a * q))
+    return a, float(np.median(s - a * q)) #return b as median value
 
 
 def query_window_from_z_map(a: float, b: float, s_lo: int, s_hi: int,
