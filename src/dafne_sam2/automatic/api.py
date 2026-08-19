@@ -5,15 +5,15 @@ import numpy as np
 import torch
 from skimage.measure import label as cc_label
 
-from sam2_support_match.automatic.backbone import MedSAM2Segmenter, mask_to_box
-from sam2_support_match.automatic.checkpoints import resolve_checkpoint
-from sam2_support_match.matching import (
+from dafne_sam2.automatic.backbone import SAM2Segmenter, mask_to_box
+from dafne_sam2.automatic.checkpoints import resolve_checkpoint
+from dafne_sam2.matching import (
     build_multiclass_bags, multiclass_score_maps, multiclass_masks,
     pick_anchors, estimate_z_window, _overlap_frac, _positional_channels,
 )
-from sam2_support_match.metrics import dice
-from sam2_support_match.preprocessing import body_mask_2d, body_z_extent
-from sam2_support_match.utils import _to_grid, leg_crop_boxes
+from dafne_sam2.metrics import dice
+from dafne_sam2.preprocessing import body_mask_2d, body_z_extent
+from dafne_sam2.utils import _to_grid, leg_crop_boxes
 
 
 def _crop_slices(slices: dict[int, np.ndarray], box: tuple) -> dict[int, np.ndarray]:
@@ -87,7 +87,7 @@ def find_prompts(support_slices: dict[int, np.ndarray],
                  anchor_min_gap: int = 2,
                  score_mode: str = 'sum_margin',
                  return_windows: bool = False,
-                 seg: MedSAM2Segmenter | None = None,
+                 seg: SAM2Segmenter | None = None,
                  debug_sink: dict | None = None,
                  query_masks: dict[str, dict[int, np.ndarray]] | None = None,
                  ) -> dict[str, dict[int, np.ndarray]]:
@@ -104,7 +104,7 @@ def find_prompts(support_slices: dict[int, np.ndarray],
     """
     if seg is None:
         checkpoint, model_cfg = resolve_checkpoint(checkpoint, model_cfg)
-        seg = MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+        seg = SAM2Segmenter(checkpoint, model_cfg, device=device)
 
     sorted_idxs = sorted(query_slices)
     windows, centres = _windows_from_ranges(window, support_masks, sorted_idxs)
@@ -243,16 +243,16 @@ def _fill_gaps(out: dict, sorted_idxs: list) -> None:
 
 
 def propagate(query_slices: dict[int, np.ndarray],
-             prompts: dict[str, dict[int, np.ndarray]],
-             checkpoint: str | None = None,
-             model_cfg: str | None = None,
-             device: str = "auto",
-             z_bounds: dict[str, tuple[int, int]] | None = None,
-             seg: MedSAM2Segmenter | None = None,
-             prompt_kind: str | dict[str, str] = 'mask',
-             resolve_overlaps: bool = False,
-             joint_propagate: bool = False,
-             fill_gaps: bool = False) -> dict[str, dict[int, np.ndarray]]:
+              prompts: dict[str, dict[int, np.ndarray]],
+              checkpoint: str | None = None,
+              model_cfg: str | None = None,
+              device: str = "auto",
+              z_bounds: dict[str, tuple[int, int]] | None = None,
+              seg: SAM2Segmenter | None = None,
+              prompt_kind: str | dict[str, str] = 'mask',
+              resolve_overlaps: bool = False,
+              joint_propagate: bool = False,
+              fill_gaps: bool = False) -> dict[str, dict[int, np.ndarray]]:
     """
     Propagation only, matching-agnostic: prompts can come from find_prompts, an external
     tool, or manual annotation. One SAM2 pass per roi, or one shared session (joint_propagate).
@@ -269,7 +269,7 @@ def propagate(query_slices: dict[int, np.ndarray],
     """
     if seg is None:
         checkpoint, model_cfg = resolve_checkpoint(checkpoint, model_cfg)
-        seg = MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+        seg = SAM2Segmenter(checkpoint, model_cfg, device=device)
 
     sorted_idxs = sorted(query_slices)
     vol_u8 = np.stack([query_slices[idx] for idx in sorted_idxs])
@@ -365,7 +365,7 @@ def match_support_query(support_slices: dict[int, np.ndarray],
     full-size; window is a z range so the in-plane crop does not affect it.
     """
     checkpoint, model_cfg = resolve_checkpoint(checkpoint, model_cfg)
-    seg = MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+    seg = SAM2Segmenter(checkpoint, model_cfg, device=device)
 
     if split_legs:
         supp_vol = np.stack([support_slices[idx] for idx in sorted(support_slices)])

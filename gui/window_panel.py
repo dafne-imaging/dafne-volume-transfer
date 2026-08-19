@@ -1,7 +1,7 @@
 from qtpy.QtWidgets import QMessageBox
 
-from sam2_support_match.automatic.api import estimate_windows
-from sam2_support_match.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
+from dafne_sam2.automatic.api import estimate_windows
+from dafne_sam2.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
 
 
 class WindowPanelMixin:

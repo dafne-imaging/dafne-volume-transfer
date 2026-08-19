@@ -27,15 +27,15 @@ There is no lint/format command configured in this repo.
 
 ### Runtime configuration (env vars, see `gui/config.py` / `automatic/checkpoints.py`)
 
-- `SAM2_SUPPORT_MATCH_CHECKPOINT` — path to the SAM2 `.pt` checkpoint (auto-downloaded to
+- `DAFNE_SAM2_CHECKPOINT` — path to the SAM2 `.pt` checkpoint (auto-downloaded to
   the platform cache dir, via `appdirs`, on first GUI run if missing).
-- `SAM2_SUPPORT_MATCH_MODEL_CFG` — hydra config name, resolved relative to the installed
+- `DAFNE_SAM2_MODEL_CFG` — hydra config name, resolved relative to the installed
   `sam2` package (e.g. `configs/sam2.1/sam2.1_hiera_t.yaml`); must be the entry paired with
   the checkpoint above in `CHECKPOINT_MODELS` (`automatic/checkpoints.resolve_model` picks
   both together by name, avoiding a mismatched pair).
-- `SAM2_SUPPORT_MATCH_DEVICE` — `auto` (default), `cpu`, `mps`, `cuda:N`; see
+- `DAFNE_SAM2_DEVICE` — `auto` (default), `cpu`, `mps`, `cuda:N`; see
   `automatic/device_utils.pick_device`.
-- `SAM2_SUPPORT_MATCH_DEBUG_DIR` — when set, the GUI's Segment run dumps per-ROI matching
+- `DAFNE_SAM2_DEBUG_DIR` — when set, the GUI's Segment run dumps per-ROI matching
   candidates/scores/dice via `automatic/debugging.dump_run`.
 
 ## Architecture
@@ -70,7 +70,7 @@ query volume.
 
 ### Matching internals (`matching.py`)
 
-- Appearance vectors are SAM2 encoder features (`backbone.MedSAM2Segmenter._fuse_fpn_levels`,
+- Appearance vectors are SAM2 encoder features (`backbone.SAM2Segmenter._fuse_fpn_levels`,
   concatenating all FPN levels resampled onto the finest grid) concatenated with 3
   position channels (`_positional_channels`: radius + angle from the slice's own body
   centroid) — position disambiguates ROIs where appearance alone degrades (e.g. a
@@ -119,7 +119,7 @@ Query GT (if the query `.npz` has its own labels) is used only for scoring after
 (`metrics.evaluate`), positionally matched against the support's `roi_names` — never fed
 into matching itself.
 
-### Public API for external callers (`src/sam2_support_match/public_api.py`)
+### Public API for external callers (`src/dafne_sam2/public_api.py`)
 
 GUI-independent (no `qtpy`/`gui` import) entry points for embedding this package elsewhere
 (e.g. dafne):
@@ -135,13 +135,13 @@ GUI-independent (no `qtpy`/`gui` import) entry points for embedding this package
   (whole-volume masks aligned with `support`), not the per-slice-dict form used elsewhere.
 - `SAM_propagate(image, masks, seg=None, ...) -> dict[roi_name -> dict[slice_idx -> mask]]`
   — thin wrapper over `automatic/api.propagate` for a raw `[Z,H,W]` volume input.
-- `load_segmenter(checkpoint_dir, progress_callback=None, checkpoint_name='sam2.1_tiny', device='auto') -> MedSAM2Segmenter`
+- `load_segmenter(checkpoint_dir, progress_callback=None, checkpoint_name='sam2.1_tiny', device='auto') -> SAM2Segmenter`
   — modeled on `dafne.utils.sam_mask_refine.load_sam`: lets an external caller manage its
   own model directory and download-progress UI instead of this package's default cache dir.
   `checkpoint_name` is a key into `CHECKPOINT_MODELS` (see above) — selecting a model by
   name always pairs its weights with the correct hydra config.
 
-All four accept an optional `seg: MedSAM2Segmenter`. Passed in, it's reused as-is (caller
+All four accept an optional `seg: SAM2Segmenter`. Passed in, it's reused as-is (caller
 owns its lifecycle); left `None`, each call builds its own default segmenter
 (`CHECKPOINT_MODELS["sam2.1_tiny"]`, downloaded into the `appdirs` cache dir if needed) and
 releases it before returning — so a call with no `seg` is self-contained but reloads
@@ -151,9 +151,9 @@ weights every time.
 
 `MainWindow` (`main_window.py`) composes mixins, each owning one sidebar concern:
 `IOPanelMixin` (load/export), `WindowPanelMixin` (extent-route window state — see its own
-file), `AutomaticPanelMixin` (Extent-route run: builds/releases the `MedSAM2Segmenter`,
+file), `AutomaticPanelMixin` (Extent-route run: builds/releases the `SAM2Segmenter`,
 calls `find_prompts` + `propagate`), `MatchPanelMixin` (Slice-match route, drives a
 `SliceMatchSession`). `SlicePane`/`slice_pane.py` renders one volume with slice scrubbing
-and overlay marks. The `MedSAM2Segmenter` (GPU-resident SAM2 model) is built lazily on
+and overlay marks. The `SAM2Segmenter` (GPU-resident SAM2 model) is built lazily on
 first Segment/match action and released (`_release_seg`) after every run and on window
 close — it is not meant to sit resident on the GPU between actions.

@@ -4,7 +4,7 @@ Small, GUI-independent public surface for external callers: refine a single mask
 (transfer_slice, mimicking the GUI's Slice-match route), and propagate an anchored set of
 masks across a whole query volume (SAM_propagate, automatic.api.propagate under the hood).
 
-Each function accepts an optional `seg` (MedSAM2Segmenter). Pass one in to reuse a loaded
+Each function accepts an optional `seg` (SAM2Segmenter). Pass one in to reuse a loaded
 model across calls; leave it None for a self-contained call that loads and releases its own.
 """
 
@@ -15,33 +15,34 @@ from typing import Callable, Optional
 import numpy as np
 from appdirs import user_cache_dir
 
-from sam2_support_match.automatic.api import propagate
-from sam2_support_match.automatic.backbone import MedSAM2Segmenter, mask_to_box
-from sam2_support_match.automatic.checkpoints import resolve_model
-from sam2_support_match.preprocessing import volume_to_slices, volume_to_uint8
-from sam2_support_match.semi_automatic.slice_api import SliceMatchSession
+from dafne_sam2.automatic.api import propagate
+from dafne_sam2.automatic.backbone import SAM2Segmenter, mask_to_box
+from dafne_sam2.automatic.checkpoints import resolve_model, CHECKPOINT_MODELS
+from dafne_sam2.preprocessing import volume_to_slices, volume_to_uint8
+from dafne_sam2.semi_automatic.slice_api import SliceMatchSession
 
 # Mirrors gui/config.py's defaults, duplicated here (rather than imported) so this module
 # stays usable without qtpy/gui installed.
-_CKPT_DIR = user_cache_dir("sam2_support_match")
+_CKPT_DIR = user_cache_dir("dafne_sam2")
 _CKPT_NAME = "sam2.1_tiny"
 
+AVAILABLE_MODELS = list(CHECKPOINT_MODELS.keys())
 
-def _default_segmenter() -> MedSAM2Segmenter:
-    """Build a MedSAM2Segmenter for CHECKPOINT_MODELS[_CKPT_NAME], downloading it into
+def _default_segmenter() -> SAM2Segmenter:
+    """Build a SAM2Segmenter for CHECKPOINT_MODELS[_CKPT_NAME], downloading it into
     _CKPT_DIR first if it's missing on disk (see gui/automatic_panel._get_seg, same default
     model, without the Qt dependency)."""
     checkpoint, model_cfg = resolve_model(_CKPT_NAME, _CKPT_DIR)
-    device = os.environ.get("SAM2_SUPPORT_MATCH_DEVICE", "auto")
-    return MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+    device = os.environ.get("DAFNE_SAM2_DEVICE", "auto")
+    return SAM2Segmenter(checkpoint, model_cfg, device=device)
 
 
 def load_segmenter(checkpoint_dir: str,
                    progress_callback: Optional[Callable[[int, int], None]] = None,
                    checkpoint_name: str = _CKPT_NAME,
-                   device: str = "auto") -> MedSAM2Segmenter:
+                   device: str = "auto") -> SAM2Segmenter:
     """
-    Load a MedSAM2Segmenter, downloading its checkpoint into checkpoint_dir first if it
+    Load a SAM2Segmenter, downloading its checkpoint into checkpoint_dir first if it
     isn't there yet. Modeled after dafne.utils.sam_mask_refine.load_sam: for a caller (e.g.
     dafne) that manages its own model directory instead of this package's default cache dir,
     and wants download progress to drive its own UI.
@@ -57,7 +58,7 @@ def load_segmenter(checkpoint_dir: str,
     device: see automatic.device_utils.pick_device ('auto', 'cpu', 'mps', 'cuda:N', ...).
     """
     checkpoint, model_cfg = resolve_model(checkpoint_name, checkpoint_dir, progress_callback=progress_callback)
-    return MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+    return SAM2Segmenter(checkpoint, model_cfg, device=device)
 
 
 def _slice_to_uint8(frame: np.ndarray) -> np.ndarray:
@@ -77,7 +78,7 @@ def _mask_volume_to_slices(vol: np.ndarray) -> dict[int, np.ndarray]:
     return {z: vol[z] for z in range(vol.shape[0]) if vol[z].any()}
 
 
-def _refine_mask(seg: MedSAM2Segmenter, frame_u8: np.ndarray, mask: np.ndarray,
+def _refine_mask(seg: SAM2Segmenter, frame_u8: np.ndarray, mask: np.ndarray,
                  prompt_kind: str = 'mask') -> np.ndarray:
     """Core of SAM_refine: frame_u8 already uint8, mask already bool. Runs the initial mask
     through SAM2 as a single-frame session (backbone.segment_volume_mask/segment_volume_box)
@@ -98,8 +99,8 @@ def _refine_mask(seg: MedSAM2Segmenter, frame_u8: np.ndarray, mask: np.ndarray,
     return out[0].astype(bool)
 
 
-def SAM_refine(image: np.ndarray, mask: np.ndarray, seg: MedSAM2Segmenter | None = None,
-              prompt_kind: str = 'mask') -> np.ndarray:
+def SAM_refine(image: np.ndarray, mask: np.ndarray, seg: SAM2Segmenter | None = None,
+               prompt_kind: str = 'mask') -> np.ndarray:
     """
     Refine an initial binary mask on a single 2D image using SAM2.
     image: [H,W] grayscale, any dtype. mask: [H,W] binary initial (pseudo-)segmentation.
@@ -117,7 +118,7 @@ def SAM_refine(image: np.ndarray, mask: np.ndarray, seg: MedSAM2Segmenter | None
 
 
 def transfer_slice(image: np.ndarray, support: np.ndarray, support_masks: dict[str, np.ndarray],
-                   seg: MedSAM2Segmenter | None = None,
+                   seg: SAM2Segmenter | None = None,
                    prompt_kind: str | dict[str, str] = 'mask') -> dict[str, np.ndarray]:
     """
     Segment a single query image from one annotated support volume, one ROI at a time:
@@ -163,7 +164,7 @@ def transfer_slice(image: np.ndarray, support: np.ndarray, support_masks: dict[s
 
 
 def SAM_propagate(image: np.ndarray, masks: dict[str, dict[int, np.ndarray]],
-                  seg: MedSAM2Segmenter | None = None,
+                  seg: SAM2Segmenter | None = None,
                   z_bounds: dict[str, tuple[int, int]] | None = None,
                   prompt_kind: str | dict[str, str] = 'mask',
                   resolve_overlaps: bool = False,

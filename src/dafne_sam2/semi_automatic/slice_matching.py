@@ -5,8 +5,8 @@ import torch
 from collections import defaultdict
 import torch.nn.functional as F
 
-from sam2_support_match.preprocessing import body_mask_2d
-from sam2_support_match.utils import _to_grid
+from dafne_sam2.preprocessing import body_mask_2d
+from dafne_sam2.utils import _to_grid
 
 def descriptor_from_feat(feat: torch.Tensor, mask: np.ndarray = None,
                          soft: bool = False) -> torch.Tensor:

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sam2-support-match"
+name = "dafne-sam2"
 version = "0.1.0"
 description = "One shot support/query matching and SAM2 segmentation"
 readme = "README.md"
@@ -34,10 +34,10 @@ napari = [
 ]
 
 [project.entry-points."napari.manifest"]
-napari-sam2-support-match = "napari_sam2_support_match:napari.yaml"
+napari-dafne-sam2 = "napari_dafne_sam2:napari.yaml"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-napari_sam2_support_match = ["napari.yaml"]
+napari_dafne_sam2 = ["napari.yaml"]

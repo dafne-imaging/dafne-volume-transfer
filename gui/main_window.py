@@ -11,15 +11,15 @@ from gui.match_panel import MatchPanelMixin
 from gui.slice_pane import SlicePane
 from gui.style import ROI_COLORS
 from gui.window_panel import WindowPanelMixin
-from sam2_support_match.automatic.backbone import MedSAM2Segmenter, mask_to_box
-from sam2_support_match.preprocessing import masks_to_labels
-from sam2_support_match.semi_automatic.slice_api import SliceMatchSession
+from dafne_sam2.automatic.backbone import SAM2Segmenter, mask_to_box
+from dafne_sam2.preprocessing import masks_to_labels
+from dafne_sam2.semi_automatic.slice_api import SliceMatchSession
 
 
 class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixin, MatchPanelMixin):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("sam2-support-match")
+        self.setWindowTitle("dafne-sam2")
 
         self.support_vol = self.support_lbl = None
         self.query_vol = self.query_lbl = None
@@ -33,7 +33,7 @@ class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixi
         self.result: dict[str, dict[int, np.ndarray]] = {}
         self.anchors: dict[str, dict[int, np.ndarray]] = {}
         self.session: SliceMatchSession | None = None  # semi-auto slice matching, see slice_api
-        self.seg: MedSAM2Segmenter | None = None
+        self.seg: SAM2Segmenter | None = None
 
         self.support_pane = SlicePane("Support", "reference masks")
         self.query_pane = SlicePane("Query", "review/confirm the suggested extent")

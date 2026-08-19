@@ -1,10 +1,10 @@
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QApplication, QMessageBox
 
-from sam2_support_match import metrics
-from sam2_support_match.automatic.api import propagate
-from sam2_support_match.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
-from sam2_support_match.semi_automatic.slice_api import SliceMatchSession
+from dafne_sam2 import metrics
+from dafne_sam2.automatic.api import propagate
+from dafne_sam2.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
+from dafne_sam2.semi_automatic.slice_api import SliceMatchSession
 
 
 class MatchPanelMixin:

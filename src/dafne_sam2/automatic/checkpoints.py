@@ -3,8 +3,8 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
-_ENV_CKPT = "SAM2_SUPPORT_MATCH_CHECKPOINT"
-_ENV_CFG = "SAM2_SUPPORT_MATCH_MODEL_CFG"
+_ENV_CKPT = "DAFNE_SAM2_CHECKPOINT"
+_ENV_CFG = "DAFNE_SAM2_MODEL_CFG"
 
 _SAM2_BASE_URL = "https://dl.fbaipublicfiles.com/segment_anything_2"
 

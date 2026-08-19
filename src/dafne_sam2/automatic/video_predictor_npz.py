@@ -1,7 +1,7 @@
 """
 SAM2VideoPredictor variant whose init_state takes an already-preprocessed image tensor
 directly, instead of a video path. Stock SAM2's init_state loads frames from a directory of
-jpegs or an mp4 (sam2.utils.misc.load_video_frames); backbone.MedSAM2Segmenter does its own
+jpegs or an mp4 (sam2.utils.misc.load_video_frames); backbone.SAM2Segmenter does its own
 frame prep (_preprocess) and hands the resulting tensor straight to init_state, so there is
 never a video file on disk to load from.
 
@@ -18,7 +18,7 @@ import torch
 from sam2.build_sam import _load_checkpoint
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 
-from sam2_support_match.preprocessing import IMG_SIZE
+from dafne_sam2.preprocessing import IMG_SIZE
 
 _FEAT_STRIDE = 16  # SAM2's memory-attention feature grid is image_size / 16 per side
 
@@ -28,7 +28,7 @@ class SAM2VideoPredictorNPZ(SAM2VideoPredictor):
     def init_state(self, images: torch.Tensor, video_height: int, video_width: int,
                    offload_video_to_cpu: bool = False, offload_state_to_cpu: bool = False):
         """images: [Z,3,image_size,image_size] preprocessed tensor (see
-        backbone.MedSAM2Segmenter._preprocess), image_size matching the model this predictor
+        backbone.SAM2Segmenter._preprocess), image_size matching the model this predictor
         was built with (build_sam2_video_predictor_npz's image_size)."""
         compute_device = self.device
         inference_state = {
@@ -73,7 +73,7 @@ def build_sam2_video_predictor_npz(config_file: str, ckpt_path: str = None, devi
 
     feat_side = image_size // _FEAT_STRIDE
     hydra_overrides = [
-        "++model._target_=sam2_support_match.automatic.video_predictor_npz.SAM2VideoPredictorNPZ",
+        "++model._target_=dafne_sam2.automatic.video_predictor_npz.SAM2VideoPredictorNPZ",
         f"++model.image_size={image_size}",
         f"++model.memory_attention.layer.self_attention.feat_sizes=[{feat_side},{feat_side}]",
         f"++model.memory_attention.layer.cross_attention.feat_sizes=[{feat_side},{feat_side}]",

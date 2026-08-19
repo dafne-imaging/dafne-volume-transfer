@@ -5,7 +5,7 @@ from qtpy.QtWidgets import QFileDialog, QMessageBox
 
 from gui.config import DEMO_QUERY, DEMO_SUPPORT, REPO
 from gui.slice_pane import load_case
-from sam2_support_match.preprocessing import labels_to_masks, masks_to_labels
+from dafne_sam2.preprocessing import labels_to_masks, masks_to_labels
 
 
 class IOPanelMixin:

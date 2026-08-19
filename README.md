@@ -1,11 +1,11 @@
-# sam2-support-match
+# dafne-sam2
 
 One-shot support/query matching and segmentation on SAM2 embeddings, for MRI (PerSAM-style bag-of-vectors matching).
 
 ## Structure
 
 ```
-src/sam2_support_match/
+src/dafne_sam2/
   automatic/         automatic pipeline (api.py, backbone.py, checkpoints.py, ...)
   semi_automatic/     semi-automatic pipeline (slice_api.py, slice_matching.py)
   matching.py         shared multiclass scoring

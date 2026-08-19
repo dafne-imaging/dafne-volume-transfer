@@ -5,9 +5,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from sam2_support_match.automatic.device_utils import pick_device, empty_cache
-from sam2_support_match.automatic.video_predictor_npz import build_sam2_video_predictor_npz
-from sam2_support_match.preprocessing import resize_grayscale_to_rgb_and_resize, IMG_SIZE
+from dafne_sam2.automatic.device_utils import pick_device, empty_cache
+from dafne_sam2.automatic.video_predictor_npz import build_sam2_video_predictor_npz
+from dafne_sam2.preprocessing import resize_grayscale_to_rgb_and_resize, IMG_SIZE
 
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD  = (0.229, 0.224, 0.225)
@@ -26,7 +26,7 @@ def mask_to_box(mask: np.ndarray, margin: int = 0) -> tuple | None:
     return (max(0, x0), max(0, y0), min(W, x1), min(H, y1))
 
 
-class MedSAM2Segmenter:
+class SAM2Segmenter:
     def __init__(self, checkpoint: str, model_cfg: str, device: str='auto'):
         """Load the SAM2 video predictor from checkpoint/config. device: see pick_device."""
         self.checkpoint = checkpoint

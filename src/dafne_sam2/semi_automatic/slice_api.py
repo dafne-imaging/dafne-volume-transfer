@@ -1,17 +1,17 @@
 import numpy as np
 import torch
 
-from sam2_support_match.matching import (
+from dafne_sam2.matching import (
     build_multiclass_bags, multiclass_score_maps, multiclass_masks,
     _positional_channels,
 )
-from sam2_support_match.preprocessing import body_mask_2d
-from sam2_support_match.semi_automatic.slice_matching import (
+from dafne_sam2.preprocessing import body_mask_2d
+from dafne_sam2.semi_automatic.slice_matching import (
     align_region, body_geometry, build_body_geometry, build_roi_pool_weights,
     build_roi_region_masks, build_slice_bags, fit_z_map, normalized_geometry,
     query_support_slice_similarity, query_window_from_z_map, roi_reference_centroid,
 )
-from sam2_support_match.utils import _to_grid
+from dafne_sam2.utils import _to_grid
 
 
 class SliceMatchSession:

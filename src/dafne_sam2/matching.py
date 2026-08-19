@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from skimage.measure import label as cc_label
 from scipy.ndimage import binary_dilation
 
-from sam2_support_match.preprocessing import body_mask_2d
-from sam2_support_match.utils import _largest_cc, _to_grid, _two_legs_cc
+from dafne_sam2.preprocessing import body_mask_2d
+from dafne_sam2.utils import _largest_cc, _to_grid, _two_legs_cc
 
 BG_KEY = "__background__"
 
