@@ -72,9 +72,10 @@ def _default_segmenter(progress_callback: Optional[ProgressCallback] = None,
 
 
 def load_segmenter(checkpoint_dir: str,
-                   progress_callback: Optional[ProgressCallback] = None,
                    checkpoint_name: str = _CKPT_NAME,
-                   device: str = "auto") -> SAM2Segmenter:
+                   device: str = "auto",
+                   progress_callback: Optional[ProgressCallback] = None
+                   ) -> SAM2Segmenter:
     """
     Load a SAM2Segmenter, downloading its checkpoint into checkpoint_dir first if it
     isn't there yet. Modeled after dafne.utils.sam_mask_refine.load_sam: for a caller (e.g.
@@ -156,6 +157,9 @@ def SAM_refine(image: np.ndarray, mask: np.ndarray, seg: SAM2Segmenter | None = 
         out = _refine_mask(seg, frame_u8, np.asarray(mask) > 0, prompt_kind=prompt_kind)
         _report(progress_callback, 100)
         return out
+    except Exception as e:
+        print("Error in SAM_refine:", e)
+        raise
     finally:
         if owns_seg:
             seg.release()
