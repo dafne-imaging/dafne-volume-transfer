@@ -68,9 +68,9 @@ class SliceMatchSession:
         self._query_geo = {}             # query slice_idx -> body (cy, cx, scale) or None
         self._roi_centroid = {}          # roi_name -> the frame its region is drawn in
         self._scale = None               # query body size / support body size, no pair yet
-        self.pairs = {}                  # roi_name -> list[(query_idx, support_idx)], confermed query-suport pairs
-        self.prompts = {}                # roi_name -> dict[query_idx -> anchor mask], anchors on query mask
-        self.scores = {}                 # roi_name -> dict[query_idx -> anchor score], anchor's score on query mask
+        self._pairs = {}                 # roi_name -> list[(query_idx, support_idx)], confirmed query-support pairs
+        self._prompts = {}               # roi_name -> dict[query_idx -> anchor mask], anchors on query mask
+        self._scores = {}                # roi_name -> dict[query_idx -> anchor score], anchor score on query mask
 
     def mode_label(self) -> str:
         """Which of align/soft_pool is on, for a status line."""
@@ -110,7 +110,7 @@ class SliceMatchSession:
             g = self._query_geometry(i)
             return None if g is None else normalized_geometry(g, self.query_slices[i].shape)[2]
 
-        pairs = self.pairs.get(roi_name) if roi_name else None
+        pairs = self._pairs.get(roi_name) if roi_name else None
         if pairs:
             ratios = [q_size(q) / normalized_geometry(supp[s], supp_shape)[2]
                       for q, s in pairs if s in supp and q_size(q) is not None]
@@ -173,9 +173,9 @@ class SliceMatchSession:
     def search_range(self, roi_name: str, q_idx: int) -> tuple:
         """(lo, hi) support slices to search for q_idx, centred on the z map's prediction;
         None (search all) until a pair exists or radius <= 0."""
-        if self.search_radius <= 0 or not self.pairs.get(roi_name):
+        if self.search_radius <= 0 or not self._pairs.get(roi_name):
             return None
-        a, b = fit_z_map(self.pairs[roi_name]) #estimate slopes and intercept
+        a, b = fit_z_map(self._pairs[roi_name]) #estimate slopes and intercept
         centre = int(round(a * q_idx + b)) #estimate centre using a and b (linear regression)
         return centre - self.search_radius, centre + self.search_radius
 
@@ -238,9 +238,9 @@ class SliceMatchSession:
     def _store_anchor(self, roi_name: str, q_idx: int, s_idx: int,
                       score: float, mask: np.ndarray) -> None:
         """Commit a successfully computed pair and anchor to the session state."""
-        self.pairs.setdefault(roi_name, []).append((q_idx, s_idx))
-        self.prompts.setdefault(roi_name, {})[q_idx] = mask
-        self.scores.setdefault(roi_name, {})[q_idx] = score
+        self._pairs.setdefault(roi_name, []).append((q_idx, s_idx))
+        self._prompts.setdefault(roi_name, {})[q_idx] = mask
+        self._scores.setdefault(roi_name, {})[q_idx] = score
 
     def accept_candidate(self, candidate: MatchCandidate) -> AcceptedMatch | None:
         found = self.anchor_from_pair(
@@ -275,28 +275,28 @@ class SliceMatchSession:
 
     def drop_pair(self, roi_name: str, q_idx: int) -> None:
         """Undo one step: forget the pair anchored at query slice q_idx."""
-        self.pairs[roi_name] = [p for p in self.pairs.get(roi_name, []) if p[0] != q_idx]
-        self.prompts.get(roi_name, {}).pop(q_idx, None)
-        self.scores.get(roi_name, {}).pop(q_idx, None)
+        self._pairs[roi_name] = [p for p in self._pairs.get(roi_name, []) if p[0] != q_idx]
+        self._prompts.get(roi_name, {}).pop(q_idx, None)
+        self._scores.get(roi_name, {}).pop(q_idx, None)
 
     def matches_for(self, roi_name: str) -> tuple[tuple[int, int], ...]:
         """Confirmed ``(query_index, support_index)`` pairs for one ROI."""
-        return tuple(self.pairs.get(roi_name, ()))
+        return tuple(self._pairs.get(roi_name, ()))
 
     def anchor_indices(self, roi_name: str) -> tuple[int, ...]:
         """Sorted query indices carrying an anchor for one ROI."""
-        return tuple(sorted(self.prompts.get(roi_name, ())))
+        return tuple(sorted(self._prompts.get(roi_name, ())))
 
     def has_anchors(self, roi_name: str | None = None) -> bool:
         """Whether the session, or one ROI, contains at least one anchor."""
         if roi_name is not None:
-            return bool(self.prompts.get(roi_name))
-        return any(self.prompts.values())
+            return bool(self._prompts.get(roi_name))
+        return any(self._prompts.values())
 
     # WHERE TO GO NEXT
     def z_map(self, roi_name: str) -> tuple:
         """(a, b) with support_idx = a*query_idx + b, or None with no pair."""
-        pairs = self.pairs.get(roi_name)
+        pairs = self._pairs.get(roi_name)
         return fit_z_map(pairs) if pairs else None
 
     def query_window(self, roi_name: str) -> tuple:
@@ -315,7 +315,7 @@ class SliceMatchSession:
         if window is None:
             return None
         lo, hi = window
-        used = sorted(self.prompts.get(roi_name, {}))
+        used = sorted(self._prompts.get(roi_name, {}))
         free = [i for i in sorted(self.query_slices) if lo <= i <= hi
                 and all(abs(i - u) >= self.min_gap for u in used)]
         if not free:
@@ -327,13 +327,13 @@ class SliceMatchSession:
     # HAND OVER TO PROPAGATE
     def anchors(self) -> dict:
         """dict[roi_name -> dict[slice_idx -> mask]], api.propagate's prompts."""
-        return {roi: dict(p) for roi, p in self.prompts.items() if p}
+        return {roi: dict(p) for roi, p in self._prompts.items() if p}
 
     def z_bounds(self) -> dict:
         """dict[roi_name -> (lo, hi)], api.propagate's z_bounds: predicted window, widened
         to cover every anchor."""
         out = {}
-        for roi, prompts in self.prompts.items():
+        for roi, prompts in self._prompts.items():
             if not prompts:
                 continue
             window = self.query_window(roi) or (min(prompts), max(prompts))
