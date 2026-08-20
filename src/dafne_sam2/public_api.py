@@ -112,6 +112,11 @@ def _mask_volume_to_slices(vol: np.ndarray) -> dict[int, np.ndarray]:
     vol = np.asarray(vol) > 0
     return {z: vol[z] for z in range(vol.shape[0]) if vol[z].any()}
 
+def _normalize_to_u8(vol: np.ndarray) -> np.ndarray:
+    max_val = vol.max()
+    min_val = vol.min()
+    range_value = max_val - min_val
+    return ((vol - min_val) * 255 / range_value).astype(np.uint8)
 
 def _refine_mask(seg: SAM2Segmenter, frame_u8: np.ndarray, mask: np.ndarray,
                  prompt_kind: str = 'mask') -> np.ndarray:
@@ -122,6 +127,7 @@ def _refine_mask(seg: SAM2Segmenter, frame_u8: np.ndarray, mask: np.ndarray,
     itself -- more honest when the mask is unreliable (small/paired structures), same
     trade-off as automatic.api.propagate's prompt_kind. Empty mask with prompt_kind='box'
     returns an all-False mask (no box to prompt with)."""
+    #frame_u8 = _normalize_to_u8(frame_u8)
     if prompt_kind == 'box':
         box = mask_to_box(mask)
         if box is None:

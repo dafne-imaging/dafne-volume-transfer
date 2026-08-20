@@ -4,6 +4,7 @@ import warnings
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.ndimage import distance_transform_edt
 
 from dafne_sam2.automatic.device_utils import pick_device, empty_cache
 from dafne_sam2.automatic.video_predictor_npz import build_sam2_video_predictor_npz
@@ -13,6 +14,19 @@ _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD  = (0.229, 0.224, 0.225)
 
 FUSE_TARGET_LEVEL = 0  # stride4, 128x128: max resolution
+
+
+def mask_to_point(mask: np.ndarray) -> tuple | None:
+    """[H,W] bool -> single (x,y) positive point at the mask's most-interior pixel
+    (distance-transform argmax), or None if empty. A dense mask-only prompt makes SAM2's
+    object-score head unreliable (see segment_volume_mask) -- pairing it with one
+    corrective point fixes that. Interior-most rather than centroid: a concave/C-shaped
+    ROI's centroid can fall outside the mask."""
+    if not mask.any():
+        return None
+    dist = distance_transform_edt(mask)
+    y, x = np.unravel_index(np.argmax(dist), dist.shape)
+    return (int(x), int(y))
 
 
 def mask_to_box(mask: np.ndarray, margin: int = 0) -> tuple | None:
@@ -135,7 +149,16 @@ class SAM2Segmenter:
                             return_logits: bool = False):
         """Mask-prompt propagation for ONE object. return_logits also returns the raw
         per-pixel logit volume, so a caller can arbitrate contested pixels by SAM2's own
-        confidence (api._resolve_overlaps)."""
+        confidence (api._resolve_overlaps).
+
+        Every stock sam2/sam2.1 config sets use_mask_input_as_output_without_sam=True, so
+        a bare add_new_mask makes SAM2 echo the input mask straight back as output on that
+        (conditioning) frame without running its decoder at all -- fine when the mask is
+        trusted as-is (e.g. api.propagate's anchors), but not real refinement. Pairing it
+        with one corrective point (mask_to_point) forces the actual decoder to run: the
+        model then sees the mask as a dense prior plus a sparse point, instead of a plain
+        mask-only prompt, which the object-score head otherwise treats as too weak a
+        signal and zeroes out entirely (see _forward_sam_heads's pred_obj_scores gate)."""
         Z, H, W = vol_u8.shape
         seg = np.zeros((Z, H, W), dtype=np.uint8)
         logit_vol = np.full((Z, H, W), -1e4, dtype=np.float32) if return_logits else None
@@ -150,6 +173,11 @@ class SAM2Segmenter:
                 for fidx, mask in sorted(masks.items()):
                     self.predictor.add_new_mask(
                         inference_state=state, frame_idx=int(fidx), obj_id=1, mask=mask)
+                    point = mask_to_point(mask)
+                    if point is not None:
+                        self.predictor.add_new_points_or_box(
+                            inference_state=state, frame_idx=int(fidx), obj_id=1,
+                            points=[point], labels=[1])
 
                 for reverse in (False, True):
                     for fidx, _oids, logits in self.predictor.propagate_in_video(
