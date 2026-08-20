@@ -230,6 +230,7 @@ def SAM_propagate(image: np.ndarray, masks: dict[str, dict[int, np.ndarray]],
                   resolve_overlaps: bool = False,
                   joint_propagate: bool = False,
                   fill_gaps: bool = False,
+                  refine_mask_prompt: bool = True,
                   progress_callback: Optional[ProgressCallback] = None
                   ) -> dict[str, dict[int, np.ndarray]]:
     """
@@ -238,6 +239,10 @@ def SAM_propagate(image: np.ndarray, masks: dict[str, dict[int, np.ndarray]],
 
     image: [Z,H,W] query volume, any dtype.
     masks: dict[roi_name -> dict[slice_idx -> [H,W] binary]], the anchors to propagate from.
+    refine_mask_prompt (prompt_kind='mask', independent-session mode only): True (default)
+    pairs each anchor mask with a corrective point so SAM2 actually re-derives it instead
+    of echoing it back unchanged; False trusts every anchor mask as-is -- see
+    automatic.api.propagate / automatic.backbone.segment_volume_mask.
     progress_callback(current, total=100): percentage through the call. If seg is None, the
     checkpoint download/load (see _default_segmenter) takes 0-20%; the remaining 20-100% is
     driven by automatic.api.propagate's own progress -- one step per roi's SAM2 pass in
@@ -253,7 +258,8 @@ def SAM_propagate(image: np.ndarray, masks: dict[str, dict[int, np.ndarray]],
         query_slices = volume_to_slices(_volume_to_uint8(image))
         return propagate(query_slices, masks, seg=seg, z_bounds=z_bounds, prompt_kind=prompt_kind,
                          resolve_overlaps=resolve_overlaps, joint_propagate=joint_propagate,
-                         fill_gaps=fill_gaps, progress_callback=_scaled(progress_callback, 20, 100))
+                         fill_gaps=fill_gaps, refine_mask_prompt=refine_mask_prompt,
+                         progress_callback=_scaled(progress_callback, 20, 100))
     finally:
         if owns_seg:
             seg.release()

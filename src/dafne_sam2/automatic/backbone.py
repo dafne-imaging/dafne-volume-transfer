@@ -146,19 +146,23 @@ class SAM2Segmenter:
     @torch.inference_mode()
     def segment_volume_mask(self, vol_u8: np.ndarray,
                             masks: dict[int, np.ndarray],
-                            return_logits: bool = False):
+                            return_logits: bool = False,
+                            refine_mask_prompt: bool = True):
         """Mask-prompt propagation for ONE object. return_logits also returns the raw
         per-pixel logit volume, so a caller can arbitrate contested pixels by SAM2's own
         confidence (api._resolve_overlaps).
 
         Every stock sam2/sam2.1 config sets use_mask_input_as_output_without_sam=True, so
         a bare add_new_mask makes SAM2 echo the input mask straight back as output on that
-        (conditioning) frame without running its decoder at all -- fine when the mask is
-        trusted as-is (e.g. api.propagate's anchors), but not real refinement. Pairing it
-        with one corrective point (mask_to_point) forces the actual decoder to run: the
-        model then sees the mask as a dense prior plus a sparse point, instead of a plain
-        mask-only prompt, which the object-score head otherwise treats as too weak a
-        signal and zeroes out entirely (see _forward_sam_heads's pred_obj_scores gate)."""
+        (conditioning) frame without running its decoder at all, instead of refining it.
+        refine_mask_prompt=True (default) pairs each mask with one corrective point
+        (mask_to_point), forcing the actual decoder to run: the model then sees the mask
+        as a dense prior plus a sparse point, instead of a plain mask-only prompt, which
+        the object-score head otherwise treats as too weak a signal and zeroes out
+        entirely (see _forward_sam_heads's pred_obj_scores gate). refine_mask_prompt=False
+        skips this and trusts each mask as-is (e.g. anchors already confirmed/edited by a
+        user, where the echoed-back mask -- unchanged, not zeroed -- is exactly what's
+        wanted)."""
         Z, H, W = vol_u8.shape
         seg = np.zeros((Z, H, W), dtype=np.uint8)
         logit_vol = np.full((Z, H, W), -1e4, dtype=np.float32) if return_logits else None
@@ -173,11 +177,12 @@ class SAM2Segmenter:
                 for fidx, mask in sorted(masks.items()):
                     self.predictor.add_new_mask(
                         inference_state=state, frame_idx=int(fidx), obj_id=1, mask=mask)
-                    point = mask_to_point(mask)
-                    if point is not None:
-                        self.predictor.add_new_points_or_box(
-                            inference_state=state, frame_idx=int(fidx), obj_id=1,
-                            points=[point], labels=[1])
+                    if refine_mask_prompt:
+                        point = mask_to_point(mask)
+                        if point is not None:
+                            self.predictor.add_new_points_or_box(
+                                inference_state=state, frame_idx=int(fidx), obj_id=1,
+                                points=[point], labels=[1])
 
                 for reverse in (False, True):
                     for fidx, _oids, logits in self.predictor.propagate_in_video(

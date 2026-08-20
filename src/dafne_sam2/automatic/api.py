@@ -254,6 +254,7 @@ def propagate(query_slices: dict[int, np.ndarray],
               resolve_overlaps: bool = False,
               joint_propagate: bool = False,
               fill_gaps: bool = False,
+              refine_mask_prompt: bool = True,
               progress_callback: Optional[Callable[[int, int], None]] = None
               ) -> dict[str, dict[int, np.ndarray]]:
     """
@@ -264,6 +265,9 @@ def propagate(query_slices: dict[int, np.ndarray],
     and keeps growing.
     prompt_kind='box': prompt with the anchor's bounding box instead of its mask -- more
     honest when the pseudo-label mask itself is unreliable (small/paired structures).
+    refine_mask_prompt (independent-session mode only, prompt_kind='mask'): see
+    backbone.segment_volume_mask -- True (default) pairs each mask anchor with a
+    corrective point so SAM2 actually re-derives it; False trusts every anchor mask as-is.
     Opt-in fixes for trackers claiming each other's territory, weakest to strongest:
     resolve_overlaps (arbitrate contested pixels by raw SAM2 confidence, no-op where only
     one tracker ever reaches a pixel), joint_propagate (shared session discourages drift
@@ -334,7 +338,8 @@ def propagate(query_slices: dict[int, np.ndarray],
             boxes = {pos: box for pos, box in boxes.items() if box is not None}
             result = seg.segment_volume_box(vol_u8, boxes, return_logits=resolve_overlaps)
         else:
-            result = seg.segment_volume_mask(vol_u8, local, return_logits=resolve_overlaps)
+            result = seg.segment_volume_mask(vol_u8, local, return_logits=resolve_overlaps,
+                                             refine_mask_prompt=refine_mask_prompt)
         if resolve_overlaps:
             propagated, logits_by_roi[roi_name] = result
         else:
