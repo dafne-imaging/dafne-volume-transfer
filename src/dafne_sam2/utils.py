@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from sam2_support_match.preprocessing import body_mask_2d
+from dafne_sam2.preprocessing import body_mask_2d
 
 def _largest_cc(mask_2d: np.ndarray) -> np.ndarray: 
     """

@@ -1,19 +1,20 @@
 import itertools
 from collections import defaultdict
+from typing import Callable, Optional
 
 import numpy as np
 import torch
 from skimage.measure import label as cc_label
 
-from sam2_support_match.automatic.backbone import MedSAM2Segmenter, mask_to_box
-from sam2_support_match.automatic.checkpoints import resolve_checkpoint
-from sam2_support_match.matching import (
+from dafne_sam2.automatic.backbone import SAM2Segmenter, mask_to_box
+from dafne_sam2.automatic.checkpoints import resolve_checkpoint
+from dafne_sam2.matching import (
     build_multiclass_bags, multiclass_score_maps, multiclass_masks,
     pick_anchors, estimate_z_window, _overlap_frac, _positional_channels,
 )
-from sam2_support_match.metrics import dice
-from sam2_support_match.preprocessing import body_mask_2d, body_z_extent
-from sam2_support_match.utils import _to_grid, leg_crop_boxes
+from dafne_sam2.metrics import dice
+from dafne_sam2.preprocessing import body_mask_2d, body_z_extent
+from dafne_sam2.utils import _to_grid, leg_crop_boxes
 
 
 def _crop_slices(slices: dict[int, np.ndarray], box: tuple) -> dict[int, np.ndarray]:
@@ -87,7 +88,7 @@ def find_prompts(support_slices: dict[int, np.ndarray],
                  anchor_min_gap: int = 2,
                  score_mode: str = 'sum_margin',
                  return_windows: bool = False,
-                 seg: MedSAM2Segmenter | None = None,
+                 seg: SAM2Segmenter | None = None,
                  debug_sink: dict | None = None,
                  query_masks: dict[str, dict[int, np.ndarray]] | None = None,
                  ) -> dict[str, dict[int, np.ndarray]]:
@@ -104,7 +105,7 @@ def find_prompts(support_slices: dict[int, np.ndarray],
     """
     if seg is None:
         checkpoint, model_cfg = resolve_checkpoint(checkpoint, model_cfg)
-        seg = MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+        seg = SAM2Segmenter(checkpoint, model_cfg, device=device)
 
     sorted_idxs = sorted(query_slices)
     windows, centres = _windows_from_ranges(window, support_masks, sorted_idxs)
@@ -243,16 +244,19 @@ def _fill_gaps(out: dict, sorted_idxs: list) -> None:
 
 
 def propagate(query_slices: dict[int, np.ndarray],
-             prompts: dict[str, dict[int, np.ndarray]],
-             checkpoint: str | None = None,
-             model_cfg: str | None = None,
-             device: str = "auto",
-             z_bounds: dict[str, tuple[int, int]] | None = None,
-             seg: MedSAM2Segmenter | None = None,
-             prompt_kind: str | dict[str, str] = 'mask',
-             resolve_overlaps: bool = False,
-             joint_propagate: bool = False,
-             fill_gaps: bool = False) -> dict[str, dict[int, np.ndarray]]:
+              prompts: dict[str, dict[int, np.ndarray]],
+              checkpoint: str | None = None,
+              model_cfg: str | None = None,
+              device: str = "auto",
+              z_bounds: dict[str, tuple[int, int]] | None = None,
+              seg: SAM2Segmenter | None = None,
+              prompt_kind: str | dict[str, str] = 'mask',
+              resolve_overlaps: bool = False,
+              joint_propagate: bool = False,
+              fill_gaps: bool = False,
+              refine_mask_prompt: bool = True,
+              progress_callback: Optional[Callable[[int, int], None]] = None
+              ) -> dict[str, dict[int, np.ndarray]]:
     """
     Propagation only, matching-agnostic: prompts can come from find_prompts, an external
     tool, or manual annotation. One SAM2 pass per roi, or one shared session (joint_propagate).
@@ -261,15 +265,22 @@ def propagate(query_slices: dict[int, np.ndarray],
     and keeps growing.
     prompt_kind='box': prompt with the anchor's bounding box instead of its mask -- more
     honest when the pseudo-label mask itself is unreliable (small/paired structures).
+    refine_mask_prompt (independent-session mode only, prompt_kind='mask'): see
+    backbone.segment_volume_mask -- True (default) pairs each mask anchor with a
+    corrective point so SAM2 actually re-derives it; False trusts every anchor mask as-is.
     Opt-in fixes for trackers claiming each other's territory, weakest to strongest:
     resolve_overlaps (arbitrate contested pixels by raw SAM2 confidence, no-op where only
     one tracker ever reaches a pixel), joint_propagate (shared session discourages drift
     in the first place, combinable with resolve_overlaps), fill_gaps (patch an isolated
     single-slice dropout, applied last).
+    progress_callback(rois_done, rois_total): called after each roi's SAM2 pass completes
+    (independent-session mode) or once before/after the single shared pass (joint_propagate,
+    where per-roi granularity isn't available -- one shared SAM2 session tracks every roi at
+    once).
     """
     if seg is None:
         checkpoint, model_cfg = resolve_checkpoint(checkpoint, model_cfg)
-        seg = MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+        seg = SAM2Segmenter(checkpoint, model_cfg, device=device)
 
     sorted_idxs = sorted(query_slices)
     vol_u8 = np.stack([query_slices[idx] for idx in sorted_idxs])
@@ -293,7 +304,11 @@ def propagate(query_slices: dict[int, np.ndarray],
             else:
                 local_prompts[roi_name] = local
 
+        if progress_callback is not None:
+            progress_callback(0, 1)
         result = seg.segment_volume_joint(vol_u8, local_prompts, kinds, return_logits=resolve_overlaps)
+        if progress_callback is not None:
+            progress_callback(1, 1)
         propagated_by_roi, logits_by_roi = result if resolve_overlaps else (result, None)
 
         out = {}
@@ -310,7 +325,10 @@ def propagate(query_slices: dict[int, np.ndarray],
 
     out = {}
     logits_by_roi = {} if resolve_overlaps else None
-    for roi_name, roi_prompts in prompts.items():
+    n_rois = len(prompts)
+    if progress_callback is not None:
+        progress_callback(0, n_rois)
+    for i, (roi_name, roi_prompts) in enumerate(prompts.items()):
         bad = [idx for idx in roi_prompts if idx not in pos_of]
         if bad:
             raise ValueError(f"prompt slice(s) {bad} for {roi_name!r} not in query_slices")
@@ -320,7 +338,8 @@ def propagate(query_slices: dict[int, np.ndarray],
             boxes = {pos: box for pos, box in boxes.items() if box is not None}
             result = seg.segment_volume_box(vol_u8, boxes, return_logits=resolve_overlaps)
         else:
-            result = seg.segment_volume_mask(vol_u8, local, return_logits=resolve_overlaps)
+            result = seg.segment_volume_mask(vol_u8, local, return_logits=resolve_overlaps,
+                                             refine_mask_prompt=refine_mask_prompt)
         if resolve_overlaps:
             propagated, logits_by_roi[roi_name] = result
         else:
@@ -329,6 +348,8 @@ def propagate(query_slices: dict[int, np.ndarray],
         out[roi_name] = {idx: (propagated[pos_of[idx]].astype(bool) if lo <= idx <= hi
                                else np.zeros(vol_u8.shape[1:], dtype=bool))
                          for idx in sorted_idxs}
+        if progress_callback is not None:
+            progress_callback(i + 1, n_rois)
 
     if resolve_overlaps:
         _resolve_overlaps(out, logits_by_roi, pos_of, sorted_idxs)
@@ -365,7 +386,7 @@ def match_support_query(support_slices: dict[int, np.ndarray],
     full-size; window is a z range so the in-plane crop does not affect it.
     """
     checkpoint, model_cfg = resolve_checkpoint(checkpoint, model_cfg)
-    seg = MedSAM2Segmenter(checkpoint, model_cfg, device=device)
+    seg = SAM2Segmenter(checkpoint, model_cfg, device=device)
 
     if split_legs:
         supp_vol = np.stack([support_slices[idx] for idx in sorted(support_slices)])

@@ -1,4 +1,4 @@
-from sam2_support_match.semi_automatic.api import (
+from .api import (
     AcceptedMatch,
     MatchCandidate,
     SliceMatchConfig,

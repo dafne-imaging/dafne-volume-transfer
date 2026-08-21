@@ -2,16 +2,15 @@
 
 from dataclasses import asdict
 
-from sam2_support_match.preprocessing import (
+from dafne_sam2.preprocessing import (
     labels_to_masks,
     volume_to_slices,
     volume_to_uint8,
 )
-from sam2_support_match.semi_automatic.session import SliceMatchSession, collect_anchors
+from .session import SliceMatchSession, collect_anchors
 from .types import AcceptedMatch, MatchCandidate, SliceMatchConfig
 
 
-# CREATE A NEW SEGMENT SESSION
 def create_session_from_volumes(
     seg,
     support_volume,
@@ -20,11 +19,7 @@ def create_session_from_volumes(
     query_volume,
     config: SliceMatchConfig | None = None,
 ) -> SliceMatchSession:
-    """Build a matching session from raw volumes and a support label map.
-       1. support normalization and query uint8 conversion
-       2. support volume labels conversion in a dictionary (as dafne convention)
-       3. create a slice match session
-    """
+    """Build a matching session from raw volumes and a support label map."""
     options = asdict(config or SliceMatchConfig())
     return SliceMatchSession(
         seg,

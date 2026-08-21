@@ -1,10 +1,10 @@
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QApplication, QMessageBox
 
-from sam2_support_match import metrics
-from sam2_support_match.automatic.api import propagate
-from sam2_support_match.preprocessing import volume_to_slices, volume_to_uint8
-from sam2_support_match.semi_automatic.api import (
+from dafne_sam2 import metrics
+from dafne_sam2.automatic.api import propagate
+from dafne_sam2.preprocessing import volume_to_slices, volume_to_uint8
+from dafne_sam2.semi_automatic.api import (
     SliceMatchConfig,
     SliceMatchSession,
     create_session_from_volumes,
@@ -174,7 +174,8 @@ class MatchPanelMixin:
                                     seg=self._get_seg(), prompt_kind=self.prompt_kind,
                                     resolve_overlaps=self.overlap_check.isChecked(),
                                     joint_propagate=self.joint_check.isChecked(),
-                                    fill_gaps=self.fillgaps_check.isChecked())
+                                    fill_gaps=self.fillgaps_check.isChecked(),
+                                    refine_mask_prompt=False)
             scores = None
             query_gt = self._query_gt_masks()
             if query_gt is not None:

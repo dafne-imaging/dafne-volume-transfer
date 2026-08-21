@@ -4,15 +4,29 @@ import warnings
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.ndimage import distance_transform_edt
 
-from sam2.build_sam import build_sam2_video_predictor_npz
-from sam2_support_match.automatic.device_utils import pick_device, empty_cache
-from sam2_support_match.preprocessing import resize_grayscale_to_rgb_and_resize, IMG_SIZE
+from dafne_sam2.automatic.device_utils import pick_device, empty_cache
+from dafne_sam2.automatic.video_predictor_npz import build_sam2_video_predictor_npz
+from dafne_sam2.preprocessing import resize_grayscale_to_rgb_and_resize, IMG_SIZE
 
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD  = (0.229, 0.224, 0.225)
 
 FUSE_TARGET_LEVEL = 0  # stride4, 128x128: max resolution
+
+
+def mask_to_point(mask: np.ndarray) -> tuple | None:
+    """[H,W] bool -> single (x,y) positive point at the mask's most-interior pixel
+    (distance-transform argmax), or None if empty. A dense mask-only prompt makes SAM2's
+    object-score head unreliable (see segment_volume_mask) -- pairing it with one
+    corrective point fixes that. Interior-most rather than centroid: a concave/C-shaped
+    ROI's centroid can fall outside the mask."""
+    if not mask.any():
+        return None
+    dist = distance_transform_edt(mask)
+    y, x = np.unravel_index(np.argmax(dist), dist.shape)
+    return (int(x), int(y))
 
 
 def mask_to_box(mask: np.ndarray, margin: int = 0) -> tuple | None:
@@ -26,7 +40,7 @@ def mask_to_box(mask: np.ndarray, margin: int = 0) -> tuple | None:
     return (max(0, x0), max(0, y0), min(W, x1), min(H, y1))
 
 
-class MedSAM2Segmenter:
+class SAM2Segmenter:
     def __init__(self, checkpoint: str, model_cfg: str, device: str='auto'):
         """Load the SAM2 video predictor from checkpoint/config. device: see pick_device."""
         self.checkpoint = checkpoint
@@ -132,10 +146,23 @@ class MedSAM2Segmenter:
     @torch.inference_mode()
     def segment_volume_mask(self, vol_u8: np.ndarray,
                             masks: dict[int, np.ndarray],
-                            return_logits: bool = False):
+                            return_logits: bool = False,
+                            refine_mask_prompt: bool = True):
         """Mask-prompt propagation for ONE object. return_logits also returns the raw
         per-pixel logit volume, so a caller can arbitrate contested pixels by SAM2's own
-        confidence (api._resolve_overlaps)."""
+        confidence (api._resolve_overlaps).
+
+        Every stock sam2/sam2.1 config sets use_mask_input_as_output_without_sam=True, so
+        a bare add_new_mask makes SAM2 echo the input mask straight back as output on that
+        (conditioning) frame without running its decoder at all, instead of refining it.
+        refine_mask_prompt=True (default) pairs each mask with one corrective point
+        (mask_to_point), forcing the actual decoder to run: the model then sees the mask
+        as a dense prior plus a sparse point, instead of a plain mask-only prompt, which
+        the object-score head otherwise treats as too weak a signal and zeroes out
+        entirely (see _forward_sam_heads's pred_obj_scores gate). refine_mask_prompt=False
+        skips this and trusts each mask as-is (e.g. anchors already confirmed/edited by a
+        user, where the echoed-back mask -- unchanged, not zeroed -- is exactly what's
+        wanted)."""
         Z, H, W = vol_u8.shape
         seg = np.zeros((Z, H, W), dtype=np.uint8)
         logit_vol = np.full((Z, H, W), -1e4, dtype=np.float32) if return_logits else None
@@ -150,6 +177,12 @@ class MedSAM2Segmenter:
                 for fidx, mask in sorted(masks.items()):
                     self.predictor.add_new_mask(
                         inference_state=state, frame_idx=int(fidx), obj_id=1, mask=mask)
+                    if refine_mask_prompt:
+                        point = mask_to_point(mask)
+                        if point is not None:
+                            self.predictor.add_new_points_or_box(
+                                inference_state=state, frame_idx=int(fidx), obj_id=1,
+                                points=[point], labels=[1])
 
                 for reverse in (False, True):
                     for fidx, _oids, logits in self.predictor.propagate_in_video(

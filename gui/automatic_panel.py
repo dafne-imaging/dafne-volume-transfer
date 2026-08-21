@@ -4,34 +4,34 @@ from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QApplication, QMessageBox
 
 from gui.config import _CKPT_NAME
-from sam2_support_match import metrics
-from sam2_support_match.automatic import debugging
-from sam2_support_match.automatic.api import find_prompts, propagate
-from sam2_support_match.automatic.backbone import MedSAM2Segmenter
-from sam2_support_match.automatic.checkpoints import CHECKPOINT_URLS, download_checkpoint, resolve_checkpoint
-from sam2_support_match.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
+from dafne_sam2 import metrics
+from dafne_sam2.automatic import debugging
+from dafne_sam2.automatic.api import find_prompts, propagate
+from dafne_sam2.automatic.backbone import SAM2Segmenter
+from dafne_sam2.automatic.checkpoints import CHECKPOINT_MODELS, download_checkpoint, resolve_checkpoint
+from dafne_sam2.preprocessing import labels_to_masks, volume_to_slices, volume_to_uint8
 
 
 class AutomaticPanelMixin:
     """The 'Extent' route's run: confirmed window per roi -> find_prompts + propagate."""
 
-    def _get_seg(self) -> MedSAM2Segmenter:
+    def _get_seg(self) -> SAM2Segmenter:
         if self.seg is None:
-            ckpt_path = os.environ["SAM2_SUPPORT_MATCH_CHECKPOINT"]
+            ckpt_path = os.environ["DAFNE_SAM2_CHECKPOINT"]
             if not os.path.isfile(ckpt_path):
-                # download_checkpoint saves under the URL's own filename, so pick the
-                # entry whose filename matches what SAM2_SUPPORT_MATCH_CHECKPOINT
+                # download_checkpoint saves under CHECKPOINT_MODELS[name]['file_name'], so
+                # pick the entry whose filename matches what DAFNE_SAM2_CHECKPOINT
                 # points at, in case a custom checkpoint path is configured
-                ckpt_name = next((n for n, u in CHECKPOINT_URLS.items()
-                                  if os.path.basename(u) == os.path.basename(ckpt_path)), _CKPT_NAME)
+                ckpt_name = next((n for n, d in CHECKPOINT_MODELS.items()
+                                  if d["file_name"] == os.path.basename(ckpt_path)), _CKPT_NAME)
                 download_checkpoint(ckpt_name, os.path.dirname(ckpt_path))
             checkpoint, model_cfg = resolve_checkpoint(None, None)
             # 'auto': CUDA when the machine has a usable one, cpu otherwise. Overridable
-            # with SAM2_SUPPORT_MATCH_DEVICE (e.g. 'cpu' to force, 'mps' to try Metal,
+            # with DAFNE_SAM2_DEVICE (e.g. 'cpu' to force, 'mps' to try Metal,
             # 'cuda:1' to pick a card) -- see backbone.pick_device.
-            device = os.environ.get("SAM2_SUPPORT_MATCH_DEVICE", "auto")
-            self.seg = MedSAM2Segmenter(checkpoint, model_cfg, device=device)
-            print(f"[sam2-support-match] running on device: {self.seg.device}", flush=True)
+            device = os.environ.get("DAFNE_SAM2_DEVICE", "auto")
+            self.seg = SAM2Segmenter(checkpoint, model_cfg, device=device)
+            print(f"[dafne-sam2] running on device: {self.seg.device}", flush=True)
         return self.seg
 
     def _release_seg(self):
@@ -61,7 +61,7 @@ class AutomaticPanelMixin:
         self.segment_btn.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
-        debug_dir = os.environ.get("SAM2_SUPPORT_MATCH_DEBUG_DIR")
+        debug_dir = os.environ.get("DAFNE_SAM2_DEBUG_DIR")
         debug_sink = {} if debug_dir else None
         # printed every run: an env var that silently did not reach the process (set on
         # its own shell line instead of the python line, so never exported) otherwise
