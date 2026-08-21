@@ -1,8 +1,11 @@
 """
-Small, GUI-independent public surface for external callers: refine a single mask
-(SAM_refine), transfer + refine a support volume's masks onto one query slice
-(transfer_slice, mimicking the GUI's Slice-match route), and propagate an anchored set of
-masks across a whole query volume (SAM_propagate, automatic.api.propagate under the hood).
+Small, GUI-independent public surface for external callers: load the shared SAM2 model,
+refine a single mask (SAM_refine), transfer + refine a support volume's masks onto one query
+slice (transfer_slice), or propagate anchors across a whole query volume (SAM_propagate).
+
+For the interactive semi-automatic workflow, create_session_from_volumes builds a
+SliceMatchSession. The caller drives suggest_support() and accept_candidate(), then hands
+session.anchors() and session.z_bounds() to SAM_propagate.
 
 Each function accepts an optional `seg` (SAM2Segmenter). Pass one in to reuse a loaded
 model across calls; leave it None for a self-contained call that loads and releases its own.
@@ -25,7 +28,10 @@ from dafne_sam2.automatic.api import propagate
 from dafne_sam2.automatic.backbone import SAM2Segmenter, mask_to_box
 from dafne_sam2.automatic.checkpoints import resolve_model, CHECKPOINT_MODELS
 from dafne_sam2.preprocessing import volume_to_slices, volume_to_uint8
-from dafne_sam2.semi_automatic.session import SliceMatchSession
+
+from dafne_sam2.semi_automatic.api import create_session_from_volumes
+from dafne_sam2.semi_automatic.api import SliceMatchConfig, SliceMatchSession
+from dafne_sam2.semi_automatic.api import MatchCandidate, AcceptedMatch
 
 # Mirrors gui/config.py's defaults, duplicated here (rather than imported) so this module
 # stays usable without qtpy/gui installed.
@@ -35,6 +41,19 @@ _CKPT_NAME = "sam2.1_tiny"
 AVAILABLE_MODELS = list(CHECKPOINT_MODELS.keys())
 
 ProgressCallback = Callable[[int, int], None]
+
+__all__ = [
+    "AVAILABLE_MODELS",
+    "load_segmenter",
+    "SAM_refine",
+    "transfer_slice",
+    "SAM_propagate",
+    "SliceMatchSession",
+    "SliceMatchConfig",
+    "MatchCandidate",
+    "AcceptedMatch",
+    "create_session_from_volumes",
+]
 
 
 def _report(callback: Optional[ProgressCallback], current: int, total: int = 100) -> None:
