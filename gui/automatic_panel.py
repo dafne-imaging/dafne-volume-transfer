@@ -57,7 +57,6 @@ class AutomaticPanelMixin:
             QMessageBox.warning(self, "No extent", "The confirmed ROI(s) are empty on the support labels.")
             return
 
-        self.status.setText("Segmenting on CPU, this takes a while…")
         self.segment_btn.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
@@ -72,15 +71,24 @@ class AutomaticPanelMixin:
             query_slices = volume_to_slices(volume_to_uint8(self.query_vol))
             # unwindowed rois are not segmented, but still act as rival classes when scoring
             query_gt = self._query_gt_masks()
+            self.status.setText("Matching support and query slices…")
+            QApplication.processEvents()
             self.anchors, bounds = find_prompts(support_slices, query_slices, support_masks,
                                                 windows, return_windows=True, seg=self._get_seg(),
                                                 debug_sink=debug_sink, query_masks=query_gt)
             # bounds stop the tracker once the organ ends, see api.propagate
+            def report_propagation(done: int, total: int) -> None:
+                self.status.setText(f"Propagating anchors… ROI {done}/{total}")
+                QApplication.processEvents()
+
+            self.status.setText("Propagating anchors…")
+            QApplication.processEvents()
             self.result = propagate(query_slices, self.anchors, z_bounds=bounds,
                                     seg=self._get_seg(), prompt_kind=self.prompt_kind,
                                     resolve_overlaps=self.overlap_check.isChecked(),
                                     joint_propagate=self.joint_check.isChecked(),
-                                    fill_gaps=self.fillgaps_check.isChecked())
+                                    fill_gaps=self.fillgaps_check.isChecked(),
+                                    progress_callback=report_propagation)
             scores = None
             if query_gt is not None:
                 scores = metrics.evaluate(self.result, query_gt, windows=bounds)
@@ -98,10 +106,6 @@ class AutomaticPanelMixin:
             QMessageBox.critical(self, "Segmentation failed", str(e))
             return
         finally:
-            # results are numpy from here on, so the run owns nothing on the GPU any more:
-            # release everything, weights included, rather than sitting on the card while
-            # the user looks at the output. Runs on failure too. Cost: the next Segment
-            # reloads the checkpoint.
             self._release_seg()
         QApplication.restoreOverrideCursor()
 
