@@ -18,7 +18,7 @@ CHECKPOINT_MODELS = {
     "sam2.1_tiny": {
         "file_name": "sam2.1_hiera_tiny.pt",
         "url": f"{_SAM2_BASE_URL}/092824/sam2.1_hiera_tiny.pt",
-        "config": "configs/sam2.1_hiera_t512.yaml",
+        "config": "configs/sam2.1/sam2.1_hiera_t.yaml",
         "size": 156008466,
     },
     "sam2.1_small": {

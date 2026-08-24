@@ -57,8 +57,7 @@ class SAM2VideoPredictorNPZ(SAM2VideoPredictor):
                 "cond_frame_outputs": set(),
                 "non_cond_frame_outputs": set(),
             },
-            "tracking_has_started": False,
-            "frames_already_tracked": {},
+            "frames_tracked_per_obj": {},
         }
         # Warm up the visual backbone and cache the image feature on frame 0
         self._get_image_feature(inference_state, frame_idx=0, batch_size=1)

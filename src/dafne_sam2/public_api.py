@@ -18,6 +18,7 @@ to report progress on).
 """
 
 import os
+import traceback
 from collections import defaultdict
 from typing import Callable, Optional
 
@@ -192,7 +193,7 @@ def SAM_refine(image: np.ndarray, mask: np.ndarray, seg: SAM2Segmenter | None = 
         _report(progress_callback, 100)
         return out
     except Exception as e:
-        print("Error in SAM_refine:", e)
+        print("Error in SAM_refine:", traceback.format_exc())
         raise
     finally:
         if owns_seg:
