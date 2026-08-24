@@ -36,6 +36,7 @@ class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixi
         self.seg: SAM2Segmenter | None = None
         self._bg_thread = None  # background QThread for the current matching/segmentation run
         self._bg_worker = None
+        self._busy = False
 
         self.support_pane = SlicePane("Support", "reference masks")
         self.query_pane = SlicePane("Query", "review/confirm the suggested extent")
@@ -54,6 +55,18 @@ class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixi
         main.addWidget(self._build_sidebar())
         main.addWidget(panes, stretch=1)
 
+        # every control that can start a new background run or mutate state a running one
+        # depends on (self.seg, self.session, loaded volumes) -- locked together while any
+        # run is in flight, not just the button that was pressed
+        self._busy_widgets = [
+            self.demo_btn, self.support_btn, self.query_btn,
+            self.roi_combo,
+            self.suggest_btn, self.confirm_btn, self.kind_combo, self.clear_btn, self.segment_btn,
+            self.find_btn, self.match_combo, self.accept_btn, self.undo_btn, self.reset_match_btn,
+            self.propagate_btn, self.overlap_check, self.joint_check, self.fillgaps_check,
+            self.export_btn, self.route_tabs,
+        ]
+
         central = QWidget()
         central.setLayout(main)
         self.setCentralWidget(central)
@@ -63,17 +76,17 @@ class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixi
 
     # -- sidebar -------------------------------------------------------------
     def _build_sidebar(self) -> QWidget:
-        demo_btn = QPushButton("Load demo case  (CHAOS → AMOS)")
-        demo_btn.clicked.connect(self._load_demo)
-        support_btn = QPushButton("Load support .npz…")
-        support_btn.clicked.connect(self._load_support)
-        query_btn = QPushButton("Load query .npz…")
-        query_btn.clicked.connect(self._load_query)
+        self.demo_btn = QPushButton("Load demo case  (CHAOS → AMOS)")
+        self.demo_btn.clicked.connect(self._load_demo)
+        self.support_btn = QPushButton("Load support .npz…")
+        self.support_btn.clicked.connect(self._load_support)
+        self.query_btn = QPushButton("Load query .npz…")
+        self.query_btn.clicked.connect(self._load_query)
 
         data_box = QGroupBox("Data")
         data_lay = QVBoxLayout()
         data_lay.setSpacing(6)
-        for w in (demo_btn, support_btn, query_btn):
+        for w in (self.demo_btn, self.support_btn, self.query_btn):
             data_lay.addWidget(w)
         data_box.setLayout(data_lay)
 
@@ -290,7 +303,21 @@ class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixi
             self.legend_lay.addWidget(holder)
         self.legend_box.setVisible(bool(self.roi_names))
 
+    def _set_busy(self, busy: bool):
+        """Lock/unlock every control that could start a second background run or mutate
+        state (self.seg, self.session, loaded volumes) the current one depends on --
+        called around every _bg_thread/_bg_worker run instead of disabling just the
+        pressed button. On unlock, _update_enabled() restores each widget's normal
+        data-dependent state rather than blanket-enabling everything."""
+        self._busy = busy
+        for w in self._busy_widgets:
+            w.setEnabled(not busy)
+        if not busy:
+            self._update_enabled()
+
     def _update_enabled(self):
+        if self._busy:
+            return
         has_query = self.query_vol is not None
         has_both = has_query and self.support_vol is not None
         self.suggest_btn.setEnabled(has_both and bool(self.roi_names))

@@ -58,8 +58,13 @@ class AutomaticPanelMixin:
             QMessageBox.warning(self, "No extent", "The confirmed ROI(s) are empty on the support labels.")
             return
 
-        self.segment_btn.setEnabled(False)
+        self._set_busy(True)
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        # read on the GUI thread, not inside work(): a background thread must never touch
+        # a Qt widget, even just to read it
+        resolve_overlaps = self.overlap_check.isChecked()
+        joint_propagate = self.joint_check.isChecked()
+        fill_gaps = self.fillgaps_check.isChecked()
         debug_dir = os.environ.get("DAFNE_SAM2_DEBUG_DIR")
         debug_sink = {} if debug_dir else None
         # printed every run: an env var that silently did not reach the process (set on
@@ -80,9 +85,9 @@ class AutomaticPanelMixin:
             report("Propagating anchors…")
             result = propagate(query_slices, anchors, z_bounds=bounds,
                                seg=self._get_seg(), prompt_kind=self.prompt_kind,
-                               resolve_overlaps=self.overlap_check.isChecked(),
-                               joint_propagate=self.joint_check.isChecked(),
-                               fill_gaps=self.fillgaps_check.isChecked(),
+                               resolve_overlaps=resolve_overlaps,
+                               joint_propagate=joint_propagate,
+                               fill_gaps=fill_gaps,
                                progress_callback=lambda done, total:
                                    report(f"Propagating anchors… ROI {done}/{total}"))
             scores = None
@@ -106,13 +111,13 @@ class AutomaticPanelMixin:
             gt = f"  dice={scores['_mean_dice']:.3f}" if scores else ""
             self.status.setText(f"Done.{dumps}{gt}  Anchors — {picked}")
             self._refresh_query_labels()
-            self._update_enabled()
+            self._set_busy(False)
 
         def on_error(msg):
             self._release_seg()
             QApplication.restoreOverrideCursor()
             self.status.setText("Segmentation failed.")
-            self._update_enabled()
+            self._set_busy(False)
             QMessageBox.critical(self, "Segmentation failed", msg)
 
         self._bg_thread, self._bg_worker = run_in_thread(

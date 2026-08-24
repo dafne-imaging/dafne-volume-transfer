@@ -59,7 +59,7 @@ class MatchPanelMixin:
         if not self._match_ready(roi):
             return
         q_idx = self.query_pane.z
-        self.find_btn.setEnabled(False)
+        self._set_busy(True)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.status.setText(f"Matching query slice {q_idx}…")
 
@@ -85,11 +85,11 @@ class MatchPanelMixin:
                     f"{best.roi_name}: query {best.query_index} → support {best.support_index} "
                     f"(sim {best.similarity:.3f}). Review, then accept."
                 )
-            self._update_enabled()
+            self._set_busy(False)
 
         def on_error(msg):
             QApplication.restoreOverrideCursor()
-            self._update_enabled()
+            self._set_busy(False)
             QMessageBox.critical(self, "Matching failed", msg)
 
         self._bg_thread, self._bg_worker = run_in_thread(self, work, None, on_finished, on_error)
@@ -110,7 +110,7 @@ class MatchPanelMixin:
         q_idx = candidate.query_index
         s_idx = candidate.support_index
         ses = self._get_session()
-        self.accept_btn.setEnabled(False)
+        self._set_busy(True)
         QApplication.setOverrideCursor(Qt.WaitCursor)
 
         def work(report):
@@ -120,6 +120,7 @@ class MatchPanelMixin:
             QApplication.restoreOverrideCursor()
             if accepted is None:
                 self.status.setText(f"{roi}: nothing matched on query slice {q_idx}.")
+                self._set_busy(False)
                 self._refresh_match_label()
                 return
 
@@ -134,11 +135,12 @@ class MatchPanelMixin:
             tail = (f" Next suggested query slice: {nxt}." if nxt is not None
                     else " Window covered -- propagate when done.")
             self.status.setText(f"{roi}: anchored query {q_idx} from support {s_idx}.{tail}")
+            self._set_busy(False)
             self._refresh_match_label()
 
         def on_error(msg):
             QApplication.restoreOverrideCursor()
-            self._update_enabled()
+            self._set_busy(False)
             QMessageBox.critical(self, "Anchor failed", msg)
 
         self._bg_thread, self._bg_worker = run_in_thread(self, work, None, on_finished, on_error)
@@ -175,17 +177,22 @@ class MatchPanelMixin:
             return
         anchors, bounds = self.session.anchors(), self.session.z_bounds()
         self.anchors = anchors
-        self.propagate_btn.setEnabled(False)
+        self._set_busy(True)
         self.status.setText("Propagating from anchors…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        # read on the GUI thread, not inside work(): a background thread must never touch
+        # a Qt widget, even just to read it
+        resolve_overlaps = self.overlap_check.isChecked()
+        joint_propagate = self.joint_check.isChecked()
+        fill_gaps = self.fillgaps_check.isChecked()
 
         def work(report):
             query_slices = volume_to_slices(volume_to_uint8(self.query_vol))
             result = propagate(query_slices, anchors, z_bounds=bounds,
                                seg=self._get_seg(), prompt_kind=self.prompt_kind,
-                               resolve_overlaps=self.overlap_check.isChecked(),
-                               joint_propagate=self.joint_check.isChecked(),
-                               fill_gaps=self.fillgaps_check.isChecked(),
+                               resolve_overlaps=resolve_overlaps,
+                               joint_propagate=joint_propagate,
+                               fill_gaps=fill_gaps,
                                refine_mask_prompt=False,
                                progress_callback=lambda done, total:
                                    report(f"Propagating from anchors… ROI {done}/{total}"))
@@ -205,13 +212,13 @@ class MatchPanelMixin:
             self.status.setText(f"Done from anchors.{gt}  {picked}")
             self.view_combo.setCurrentIndex(0)
             self._refresh_query_labels()
-            self._update_enabled()
+            self._set_busy(False)
 
         def on_error(msg):
             self._release_seg()
             QApplication.restoreOverrideCursor()
             self.status.setText("Propagation failed.")
-            self._update_enabled()
+            self._set_busy(False)
             QMessageBox.critical(self, "Propagation failed", msg)
 
         self._bg_thread, self._bg_worker = run_in_thread(
