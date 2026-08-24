@@ -212,8 +212,8 @@ def transfer_slice(image: np.ndarray, support: np.ndarray, support_masks: dict[s
     via SAM2 appearance matching, then refine it (SAM_refine).
 
     image: [H,W] query slice, any dtype.
-    support: [Z,H,W] support volume, any dtype.
-    support_masks: dict[roi_name -> [Z,H,W] binary mask, aligned with `support`].
+    support: [H,W,Z] support volume, any dtype.
+    support_masks: dict[roi_name -> [H,W,Z] binary mask, aligned with `support`].
     prompt_kind: 'mask' (default), 'box', or a per-roi dict of either -- see SAM_refine /
     automatic.api.propagate's prompt_kind.
     progress_callback(current, total=100): percentage through the call. If seg is None, the
@@ -229,6 +229,8 @@ def transfer_slice(image: np.ndarray, support: np.ndarray, support_masks: dict[s
     kind_of = (defaultdict(lambda: 'mask', prompt_kind) if isinstance(prompt_kind, dict)
               else defaultdict(lambda: prompt_kind))
     try:
+        support = np.moveaxis(np.asarray(support), -1, 0)
+        support_masks = {roi: np.moveaxis(np.asarray(vol), -1, 0) for roi, vol in support_masks.items()}
         support_slices = volume_to_slices(_volume_to_uint8(support))
         support_mask_slices = {roi: _mask_volume_to_slices(vol) for roi, vol in support_masks.items()}
         image_u8 = _slice_to_uint8(image)

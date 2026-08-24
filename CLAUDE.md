@@ -131,8 +131,10 @@ GUI-independent (no `qtpy`/`gui` import) entry points for embedding this package
   — one-shot counterpart to the GUI's Slice-match route: for each ROI independently, find
   the best-matching support slice for `image` (`SliceMatchSession`, one query slice instead
   of the GUI's multi-slice loop), transfer its mask via SAM2 appearance matching, then
-  refine it (`SAM_refine`). `support_masks` here is `dict[roi_name -> [Z,H,W] binary]`
-  (whole-volume masks aligned with `support`), not the per-slice-dict form used elsewhere.
+  refine it (`SAM_refine`). `support`/`support_masks` here use `[H,W,Z]` axis order (`Z`
+  last), unlike the `[Z,H,W]` volumes used elsewhere in this package -- `support_masks` is
+  `dict[roi_name -> [H,W,Z] binary]` (whole-volume masks aligned with `support`), not the
+  per-slice-dict form used elsewhere.
 - `SAM_propagate(image, masks, seg=None, ..., progress_callback=None) -> dict[roi_name -> dict[slice_idx -> mask]]`
   — thin wrapper over `automatic/api.propagate` for a raw `[Z,H,W]` volume input.
 - `load_segmenter(checkpoint_dir, progress_callback=None, checkpoint_name='sam2.1_tiny', device='auto') -> SAM2Segmenter`
