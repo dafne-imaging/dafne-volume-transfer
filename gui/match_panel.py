@@ -1,6 +1,7 @@
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QApplication, QMessageBox
 
+from gui.worker import run_in_thread
 from dafne_sam2 import metrics
 from dafne_sam2.automatic.api import propagate
 from dafne_sam2.preprocessing import volume_to_slices, volume_to_uint8
@@ -58,36 +59,40 @@ class MatchPanelMixin:
         if not self._match_ready(roi):
             return
         q_idx = self.query_pane.z
+        self.find_btn.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.status.setText(f"Matching query slice {q_idx}…")
-        QApplication.processEvents()
-        try:
-            ranked = self._get_session().suggest_support(roi, q_idx, top_k=3)
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Matching failed", str(e))
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
 
-        self.match_combo.blockSignals(True)
-        self.match_combo.clear()
-        for candidate in ranked:
-            self.match_combo.addItem(
-                f"support {candidate.support_index}   sim={candidate.similarity:.3f}",
-                candidate,
-            )
-        self.match_combo.blockSignals(False)
-        if not ranked:
-            self.status.setText(f"{roi}: no support slice carries this ROI.")
-        else:
-            best = ranked[0]
-            self.support_pane.set_z(best.support_index)
-            self.status.setText(
-                f"{best.roi_name}: query {best.query_index} → support {best.support_index} "
-                f"(sim {best.similarity:.3f}). Review, then accept."
-            )
-        self._update_enabled()
+        def work(report):
+            return self._get_session().suggest_support(roi, q_idx, top_k=3)
+
+        def on_finished(ranked):
+            QApplication.restoreOverrideCursor()
+            self.match_combo.blockSignals(True)
+            self.match_combo.clear()
+            for candidate in ranked:
+                self.match_combo.addItem(
+                    f"support {candidate.support_index}   sim={candidate.similarity:.3f}",
+                    candidate,
+                )
+            self.match_combo.blockSignals(False)
+            if not ranked:
+                self.status.setText(f"{roi}: no support slice carries this ROI.")
+            else:
+                best = ranked[0]
+                self.support_pane.set_z(best.support_index)
+                self.status.setText(
+                    f"{best.roi_name}: query {best.query_index} → support {best.support_index} "
+                    f"(sim {best.similarity:.3f}). Review, then accept."
+                )
+            self._update_enabled()
+
+        def on_error(msg):
+            QApplication.restoreOverrideCursor()
+            self._update_enabled()
+            QMessageBox.critical(self, "Matching failed", msg)
+
+        self._bg_thread, self._bg_worker = run_in_thread(self, work, None, on_finished, on_error)
 
     def _on_match_pick(self, index: int):
         candidate = self.match_combo.itemData(index)
@@ -105,33 +110,38 @@ class MatchPanelMixin:
         q_idx = candidate.query_index
         s_idx = candidate.support_index
         ses = self._get_session()
+        self.accept_btn.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
-        try:
-            accepted = ses.accept_candidate(candidate)
-        except Exception as e:
-            QMessageBox.critical(self, "Anchor failed", str(e))
-            return
-        finally:
+
+        def work(report):
+            return ses.accept_candidate(candidate)
+
+        def on_finished(accepted):
             QApplication.restoreOverrideCursor()
+            if accepted is None:
+                self.status.setText(f"{roi}: nothing matched on query slice {q_idx}.")
+                self._refresh_match_label()
+                return
 
-        if accepted is None:
-            self.status.setText(f"{roi}: nothing matched on query slice {q_idx}.")
+            self.anchors = ses.anchors()
+            self.view_combo.setCurrentIndex(1)  # anchors view, so the new mask is visible
+            self._refresh_query_labels()
+            self.query_pane.set_marks(set(ses.anchor_indices(roi)), "anchor")
+            # the pane stays where it is: jumping on accept moves the slice out from under
+            # the person still looking at what they just confirmed. The next slice is
+            # suggested in the status bar instead, and they scroll there when ready.
+            nxt = ses.next_query_slice(roi)
+            tail = (f" Next suggested query slice: {nxt}." if nxt is not None
+                    else " Window covered -- propagate when done.")
+            self.status.setText(f"{roi}: anchored query {q_idx} from support {s_idx}.{tail}")
             self._refresh_match_label()
-            return
 
-        self.anchors = ses.anchors()
-        self.view_combo.setCurrentIndex(1)  # anchors view, so the new mask is visible
-        self._refresh_query_labels()
-        self.query_pane.set_marks(set(ses.anchor_indices(roi)), "anchor")
-        # the pane stays where it is: jumping on accept moves the slice out from under the
-        # person still looking at what they just confirmed. The next slice is suggested in
-        # the status bar instead, and they scroll there when they are ready.
-        nxt = ses.next_query_slice(roi)
-        tail = (f" Next suggested query slice: {nxt}." if nxt is not None
-                else " Window covered -- propagate when done.")
-        self.status.setText(f"{roi}: anchored query {q_idx} from support {s_idx}.{tail}")
-        self._refresh_match_label()
+        def on_error(msg):
+            QApplication.restoreOverrideCursor()
+            self._update_enabled()
+            QMessageBox.critical(self, "Anchor failed", msg)
+
+        self._bg_thread, self._bg_worker = run_in_thread(self, work, None, on_finished, on_error)
 
     def _on_undo_match(self):
         roi = self.roi_combo.currentText()
@@ -164,36 +174,45 @@ class MatchPanelMixin:
             QMessageBox.warning(self, "No anchors", "Accept at least one match first.")
             return
         anchors, bounds = self.session.anchors(), self.session.z_bounds()
+        self.anchors = anchors
+        self.propagate_btn.setEnabled(False)
         self.status.setText("Propagating from anchors…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
-        try:
+
+        def work(report):
             query_slices = volume_to_slices(volume_to_uint8(self.query_vol))
-            self.anchors = anchors
-            self.result = propagate(query_slices, anchors, z_bounds=bounds,
-                                    seg=self._get_seg(), prompt_kind=self.prompt_kind,
-                                    resolve_overlaps=self.overlap_check.isChecked(),
-                                    joint_propagate=self.joint_check.isChecked(),
-                                    fill_gaps=self.fillgaps_check.isChecked(),
-                                    refine_mask_prompt=False)
+            result = propagate(query_slices, anchors, z_bounds=bounds,
+                               seg=self._get_seg(), prompt_kind=self.prompt_kind,
+                               resolve_overlaps=self.overlap_check.isChecked(),
+                               joint_propagate=self.joint_check.isChecked(),
+                               fill_gaps=self.fillgaps_check.isChecked(),
+                               refine_mask_prompt=False,
+                               progress_callback=lambda done, total:
+                                   report(f"Propagating from anchors… ROI {done}/{total}"))
             scores = None
             query_gt = self._query_gt_masks()
             if query_gt is not None:
-                scores = metrics.evaluate(self.result, query_gt, windows=bounds)
+                scores = metrics.evaluate(result, query_gt, windows=bounds)
                 print("[eval]\n" + metrics.format_report(scores), flush=True)
-        except Exception as e:
+            return result, scores
+
+        def on_finished(payload):
+            self._release_seg()
+            QApplication.restoreOverrideCursor()
+            self.result, scores = payload
+            gt = f"  dice={scores['_mean_dice']:.3f}" if scores else ""
+            picked = ", ".join(f"{r}: {sorted(a)}" for r, a in sorted(anchors.items()))
+            self.status.setText(f"Done from anchors.{gt}  {picked}")
+            self.view_combo.setCurrentIndex(0)
+            self._refresh_query_labels()
+            self._update_enabled()
+
+        def on_error(msg):
+            self._release_seg()
             QApplication.restoreOverrideCursor()
             self.status.setText("Propagation failed.")
             self._update_enabled()
-            QMessageBox.critical(self, "Propagation failed", str(e))
-            return
-        finally:
-            self._release_seg()
-        QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Propagation failed", msg)
 
-        gt = f"  dice={scores['_mean_dice']:.3f}" if scores else ""
-        picked = ", ".join(f"{r}: {sorted(a)}" for r, a in sorted(anchors.items()))
-        self.status.setText(f"Done from anchors.{gt}  {picked}")
-        self.view_combo.setCurrentIndex(0)
-        self._refresh_query_labels()
-        self._update_enabled()
+        self._bg_thread, self._bg_worker = run_in_thread(
+            self, work, self.status.setText, on_finished, on_error)

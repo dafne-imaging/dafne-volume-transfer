@@ -1,8 +1,8 @@
 import numpy as np
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QPushButton,
-    QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFrame, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from gui.automatic_panel import AutomaticPanelMixin
@@ -34,6 +34,8 @@ class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixi
         self.anchors: dict[str, dict[int, np.ndarray]] = {}
         self.session: SliceMatchSession | None = None  # semi-automatic slice matching session
         self.seg: SAM2Segmenter | None = None
+        self._bg_thread = None  # background QThread for the current matching/segmentation run
+        self._bg_worker = None
 
         self.support_pane = SlicePane("Support", "reference masks")
         self.query_pane = SlicePane("Query", "review/confirm the suggested extent")
@@ -342,7 +344,14 @@ class MainWindow(QMainWindow, IOPanelMixin, WindowPanelMixin, AutomaticPanelMixi
     # -- lifecycle -------------------------------------------------------------
     def closeEvent(self, event):
         """Free the GPU before the window goes away: a Qt app can outlive its main window
-        (or exit slowly), and the weights stay resident the whole time otherwise."""
+        (or exit slowly), and the weights stay resident the whole time otherwise. Refused
+        while a background run is in flight -- releasing self.seg out from under a
+        matching/propagate call still using it on its own thread would be a race."""
+        if self._bg_thread is not None and self._bg_thread.isRunning():
+            QMessageBox.warning(self, "Busy", "A matching/segmentation run is still in "
+                                              "progress -- wait for it to finish before closing.")
+            event.ignore()
+            return
         self._release_seg()
         super().closeEvent(event)
 
