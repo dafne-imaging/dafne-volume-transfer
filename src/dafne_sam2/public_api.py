@@ -203,6 +203,7 @@ def SAM_refine(image: np.ndarray, mask: np.ndarray, seg: SAM2Segmenter | None = 
 def transfer_slice(image: np.ndarray, support: np.ndarray, support_masks: dict[str, np.ndarray],
                    seg: SAM2Segmenter | None = None,
                    prompt_kind: str | dict[str, str] = 'mask',
+                   growth_cap_factor: float = 1.5,
                    progress_callback: Optional[ProgressCallback] = None) -> dict[str, np.ndarray]:
     """
     Segment a single query image from one annotated support volume, one ROI at a time:
@@ -216,6 +217,19 @@ def transfer_slice(image: np.ndarray, support: np.ndarray, support_masks: dict[s
     support_masks: dict[roi_name -> [H,W,Z] binary mask, aligned with `support`].
     prompt_kind: 'mask' (default), 'box', or a per-roi dict of either -- see SAM_refine /
     automatic.api.propagate's prompt_kind.
+    growth_cap_factor: sanity cap on SAM_refine's output size, per roi, relative to the
+    largest that roi is ever seen to be on any single support slice (i.e. capped at
+    growth_cap_factor * max(mask.sum() for mask in support_masks[roi]'s slices) -- a
+    per-call, per-roi, resolution-independent budget rather than one fixed pixel count.
+    suggest_support has no confidence floor of its own (it always returns the single
+    best-scoring support slice for a roi, even one that isn't actually on `image`), so a roi
+    absent from the query slice still produces a matched anchor mask, which SAM_refine can
+    then inflate from a handful of pixels into a large, spurious region (observed: a 5px
+    anchor for an absent roi refined into ~14.8k px, ~23% of a 256x256 slice, while every
+    genuine match in testing refined to within ~1-1.4x of its own anchor size and comfortably
+    under this cap). A refined mask over the cap is discarded and the roi is omitted from the
+    result rather than returned, since SAM_refine has demonstrably not produced a trustworthy
+    mask.  An empty anchor mask skips SAM_refine entirely (nothing to refine).
     progress_callback(current, total=100): percentage through the call. If seg is None, the
     checkpoint download/load (see _default_segmenter) takes 0-30%; setup (encoding the
     support volume, building the matching session) takes it to 40%; the remaining 40-100% is
@@ -238,6 +252,8 @@ def transfer_slice(image: np.ndarray, support: np.ndarray, support_masks: dict[s
         _report(progress_callback, 40)
 
         rois = [roi for roi, mask_slices in support_mask_slices.items() if mask_slices]
+        max_roi_px = {roi: max(m.sum() for m in mask_slices.values())
+                     for roi, mask_slices in support_mask_slices.items()}
         out = {}
         for i, roi_name in enumerate(rois):
             ranked = session.suggest_support(roi_name, 0, top_k=1)
@@ -246,7 +262,11 @@ def transfer_slice(image: np.ndarray, support: np.ndarray, support_masks: dict[s
                 found = session.anchor_from_pair(roi_name, 0, s_idx)
                 if found is not None:
                     _score, mask = found
-                    out[roi_name] = _refine_mask(seg, image_u8, mask, prompt_kind=kind_of[roi_name])
+                    if mask.any():
+                        refined = _refine_mask(seg, image_u8, mask, prompt_kind=kind_of[roi_name])
+                        cap = growth_cap_factor * max(max_roi_px[roi_name], mask.sum())
+                        if refined.sum() <= cap:
+                            out[roi_name] = refined
             _report(progress_callback, 40 + round(60 * (i + 1) / len(rois)) if rois else 100)
         return out
     finally:
