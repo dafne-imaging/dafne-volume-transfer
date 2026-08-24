@@ -98,12 +98,16 @@ def load_segmenter(checkpoint_dir: str,
 
 def _slice_to_uint8(frame: np.ndarray) -> np.ndarray:
     """[H,W] any dtype -> [H,W] uint8 (identity if already uint8)."""
-    return frame if frame.dtype == np.uint8 else volume_to_uint8(frame[None])[0]
+    if frame.dtype == np.uint8:
+        return frame
+    return _normalize_to_u8(frame)
 
 
 def _volume_to_uint8(vol: np.ndarray) -> np.ndarray:
     """[Z,H,W] any dtype -> [Z,H,W] uint8 (identity if already uint8)."""
-    return vol if vol.dtype == np.uint8 else volume_to_uint8(vol)
+    if vol.dtype == np.uint8:
+        return vol
+    return _normalize_to_u8(vol)
 
 
 def _mask_volume_to_slices(vol: np.ndarray) -> dict[int, np.ndarray]:
