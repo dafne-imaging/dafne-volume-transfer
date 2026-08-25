@@ -16,17 +16,16 @@ def empty_cache(device_type: str) -> None:
 def pick_device(requested: str = "auto") -> str:
     """
     Input: requested -- 'auto', 'cuda', 'cuda:N', 'mps' or 'cpu'
-    Return: a device string torch can actually use here ('auto' -> cuda, else mps,
-            else cpu). An unavailable device falls back to cpu with a warning.
+    Return: a device string torch can actually use here ('auto' -> cuda, else cpu).
+            MPS is only used when explicitly requested -- its matmul/conv precision
+            drifts enough from cpu to flip slice-match picks, so it is not a safe
+            'auto' default. An unavailable device falls back to cpu with a warning.
     """
     req = requested.lower()
 
     if req == "auto":
         if torch.cuda.is_available():
             return "cuda"
-        mps = getattr(torch.backends, "mps", None)
-        if mps is not None and mps.is_available():
-            return "mps"
         return "cpu"
 
     if req.startswith("cuda"):
